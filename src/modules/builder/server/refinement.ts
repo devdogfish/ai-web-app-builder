@@ -7,11 +7,9 @@ import { createArticleModelFromEnv } from "../ai/server";
 import { ArticleModelError, type ArticleModelResult } from "../ai/types";
 import { BUILDER_UPLOAD_LIMITS } from "../config/builder";
 import {
-  assertValidArticleSource,
   compactConversationMemory,
   compactedConversationBoundary,
   deriveAssetPath,
-  formatArticleHtml,
   planModelContext,
 } from "../content";
 import type { BuilderWorkspace } from "../core/contracts";
@@ -28,10 +26,19 @@ import {
   getArticleAssetContext,
   getWebsiteConfig,
 } from "../environment/websites";
-import { buildModelUploadText, fileExtension } from "../uploads";
+import {
+  buildModelUploadText,
+  docxVisualContextNote,
+  fileExtension,
+} from "../uploads";
+import { renderDocxPagesForModel } from "../uploads/render-docx-pages";
 import { getUploadStore } from "../uploads/storage";
 import { builderErrorDetails } from "./errors";
 import { getArticleRefinementCoordinator } from "./refinement-lock";
+import {
+  builderComponentModelContext,
+  prepareManagedSourceForSave,
+} from "./component-integration";
 
 const refinementRequestSchema = z
   .object({
@@ -58,6 +65,9 @@ export async function runBuilderRefinement(
   reference: unknown,
   request: unknown,
   signal?: AbortSignal,
+  internalOptions: {
+    allowPreviouslyAttachedUploadIds?: readonly string[];
+  } = {},
 ): Promise<BuilderWorkspace> {
   const input = refinementRequestSchema.parse({
     environment: reference,
@@ -79,6 +89,7 @@ export async function runBuilderRefinement(
         throw new BuilderRefinementError("Bootstrap the Builder Chat first.");
       }
       assertWorkspaceEnvironment(workspace, environment);
+      const refinementWorkspace = workspace;
 
       const selectedRecords = input.uploadIds.map((id) => {
         const upload = workspace.uploads.find(
@@ -86,7 +97,9 @@ export async function runBuilderRefinement(
         );
         if (
           !upload ||
-          (upload.messageId && !isRetryableUpload(workspace, upload.messageId))
+          (upload.messageId &&
+            !internalOptions.allowPreviouslyAttachedUploadIds?.includes(id) &&
+            !isRetryableUpload(workspace, upload.messageId))
         ) {
           throw new BuilderRefinementError("A selected upload is unavailable.");
         }
@@ -118,17 +131,29 @@ export async function runBuilderRefinement(
           const expectedAssetPath = image
             ? deriveAssetPath(website.assetPolicy, article, index + 1)
             : undefined;
-          const stored = image
-            ? await getUploadStore().get(upload.storageKey)
-            : undefined;
+          const docx = fileExtension(upload.name) === ".docx";
+          const stored =
+            image || docx
+              ? await getUploadStore().get(upload.storageKey)
+              : undefined;
+          const docxPages =
+            stored && docx
+              ? await renderDocxPagesForModel(stored.bytes, upload.name)
+              : [];
+          const uploadText = buildModelUploadText(upload, expectedAssetPath);
           return {
             id: upload.id,
             name: upload.name,
             mediaType: upload.mediaType,
-            text: buildModelUploadText(upload, expectedAssetPath),
-            dataUrl: stored
-              ? `data:${imageMediaType(upload.name)};base64,${Buffer.from(stored.bytes).toString("base64")}`
-              : undefined,
+            text:
+              docx
+                ? `${uploadText}\n\n${docxVisualContextNote(docxPages.length)}`
+                : uploadText,
+            dataUrl:
+              stored && image
+                ? `data:${imageMediaType(upload.name)};base64,${Buffer.from(stored.bytes).toString("base64")}`
+                : undefined,
+            dataUrls: docx ? docxPages : undefined,
           };
         }),
       );
@@ -155,26 +180,17 @@ export async function runBuilderRefinement(
       const uncompactedRecentTurns = recentTurns.slice(
         compactionBoundaryIndex + 1,
       );
-      const contextPlan = planModelContext({
-        systemInstructions: ARTICLE_SYSTEM_INSTRUCTIONS,
-        compactMemory: workspace.chat.compactMemory,
-        currentRequest: effectivePrompt,
-        currentDocument: workspace.currentVersion.html,
-        recentMessages: uncompactedRecentTurns,
-        selectedUploads,
-      });
-      if (contextPlan.blocked) {
-        const detail = contextPlan.blockingUpload
-          ? ` Remove oversized upload ${contextPlan.blockingUpload.name}.`
-          : " The current Article HTML and request exceed the input budget.";
-        throw new BuilderRefinementError(`Context cannot fit.${detail}`);
-      }
-      const compactMemory = compactConversationMemory(
-        workspace.chat.compactMemory,
-        uncompactedRecentTurns.filter((message) =>
-          contextPlan.excludedMessageIds.includes(message.id),
-        ),
+      const componentRequestText = [
+        effectivePrompt,
+        ...selectedUploads.map((upload) => upload.text),
+      ].join("\n");
+      let componentContext = builderComponentModelContext(
+        workspace.currentVersion.html,
+        componentRequestText,
       );
+      let contextPlan = componentContextPlan(componentContext);
+      assertContextPlanFits(contextPlan);
+      let compactMemory = plannedCompactMemory(contextPlan);
 
       const attachmentUploadIds = selectedRecords.map((upload) =>
         upload.messageId
@@ -194,57 +210,114 @@ export async function runBuilderRefinement(
         content: input.prompt,
         uploadIds: attachmentUploadIds,
       });
+      const startedAt = Date.now();
+      let firstOutputAt: number | null = null;
 
       try {
         throwIfCancelled(signal);
         const model = createArticleModelFromEnv();
         let modelResult: ArticleModelResult | null = null;
-        for await (const event of model.stream(
-          {
-            currentArticleHtml: workspace.currentVersion.html,
-            currentPrompt: effectivePrompt,
-            selectedUploadExtracts: selectedUploads,
-            recentRelevantTurns: contextPlan.messages.map((message) => ({
-              role: message.role,
-              content: message.text,
-            })),
-            compactMemory,
-            environmentContext: environment,
-          },
-          { signal },
-        )) {
-          if (event.type === "finish") modelResult = event.result;
-        }
-        if (!modelResult) {
-          throw new ArticleModelError(
-            "malformed_response",
-            "The AI provider returned no Builder response.",
+        const explicitlyRequestedTypes = new Set<string>();
+        for (let disclosureRound = 0; disclosureRound <= 2; disclosureRound += 1) {
+          modelResult = null;
+          for await (const event of model.stream(
+            {
+              currentArticleHtml: workspace.currentVersion.html,
+              currentPrompt: effectivePrompt,
+              selectedUploadExtracts: selectedUploads,
+              recentRelevantTurns: contextPlan.messages.map((message) => ({
+                role: message.role,
+                content: message.text,
+              })),
+              compactMemory,
+              environmentContext: environment,
+              componentIndex: componentContext.index,
+              componentSpecs: componentContext.specs,
+            },
+            { signal },
+          )) {
+            if (event.type === "text-delta" && firstOutputAt === null) {
+              firstOutputAt = Date.now();
+            }
+            if (event.type === "finish") modelResult = event.result;
+          }
+          if (!modelResult) {
+            throw new ArticleModelError(
+              "malformed_response",
+              "The AI provider returned no Builder response.",
+            );
+          }
+          if (modelResult.action !== "load_components") break;
+          if (disclosureRound >= 2) {
+            throw new ArticleModelError(
+              "malformed_response",
+              "The AI repeatedly requested Component specs without completing the response.",
+            );
+          }
+          const unloadedTypes = modelResult.types.filter(
+            (type) => !componentContext.loadedTypes.includes(type),
           );
+          if (unloadedTypes.length === 0) {
+            throw new ArticleModelError(
+              "malformed_response",
+              "The AI requested Component specs that were already loaded.",
+            );
+          }
+          unloadedTypes.forEach((type) => explicitlyRequestedTypes.add(type));
+          try {
+            componentContext = builderComponentModelContext(
+              workspace.currentVersion.html,
+              componentRequestText,
+              [...explicitlyRequestedTypes],
+            );
+          } catch (error) {
+            throw new ArticleModelError(
+              "malformed_response",
+              error instanceof Error
+                ? error.message
+                : "The AI requested an unavailable Component.",
+            );
+          }
+          contextPlan = componentContextPlan(componentContext);
+          assertContextPlanFits(contextPlan);
+          compactMemory = plannedCompactMemory(contextPlan);
         }
         throwIfCancelled(signal);
 
-        if (modelResult.action === "edit") {
-          const formattedArticleHtml = await formatArticleHtml(
-            modelResult.articleHtml,
+        if (!modelResult || modelResult.action === "load_components") {
+          throw new ArticleModelError(
+            "malformed_response",
+            "The AI did not complete the Builder response.",
           );
-          assertValidArticleSource(formattedArticleHtml);
+        }
+
+        if (modelResult.action === "edit") {
+          const prepared = await prepareManagedSourceForSave(
+            modelResult.articleHtml,
+            workspace.currentVersion.html,
+          );
           throwIfCancelled(signal);
+          const timing = measureTurnTiming(startedAt, firstOutputAt);
           repository.commitAssistantVersion({
             articleId: environment.articleId,
             expectedChatId: workspace.chat.id,
             expectedVersionId: workspace.currentVersion.id,
             expectedVersionSha256: workspace.currentVersion.sha256,
-            html: formattedArticleHtml,
+            html: prepared.source,
+            hostHtml: prepared.compiledHtml,
             response: modelResult.response,
             summary: modelResult.summary,
+            ...timing,
           });
         } else {
+          const timing = measureTurnTiming(startedAt, firstOutputAt);
           repository.commitAssistantAnswer({
             articleId: environment.articleId,
             expectedChatId: workspace.chat.id,
             expectedVersionId: workspace.currentVersion.id,
             expectedVersionSha256: workspace.currentVersion.sha256,
             response: modelResult.response,
+            ...timing,
           });
         }
         if (contextPlan.compacted) {
@@ -271,6 +344,7 @@ export async function runBuilderRefinement(
             content: publicError.message,
             status: publicError.code === "cancelled" ? "stopped" : "failed",
             errorCode: publicError.code,
+            ...measureTurnTiming(startedAt, firstOutputAt),
           });
         }
         if (publicError.code === "cancelled") {
@@ -281,8 +355,56 @@ export async function runBuilderRefinement(
         }
         throw new BuilderRefinementError(publicError.message);
       }
+
+      function componentContextPlan(
+        context: ReturnType<typeof builderComponentModelContext>,
+      ) {
+        return planModelContext({
+          systemInstructions: ARTICLE_SYSTEM_INSTRUCTIONS,
+          compactMemory: refinementWorkspace.chat.compactMemory,
+          currentRequest: effectivePrompt,
+          currentDocument: refinementWorkspace.currentVersion.html,
+          additionalFixedContent: [context.index, ...context.specs],
+          recentMessages: uncompactedRecentTurns,
+          selectedUploads,
+        });
+      }
+
+      function assertContextPlanFits(
+        plan: ReturnType<typeof planModelContext>,
+      ): void {
+        if (!plan.blocked) return;
+        const detail = plan.blockingUpload
+          ? ` Remove oversized upload ${plan.blockingUpload.name}.`
+          : " The current Article Source, Component specs, and request exceed the input budget.";
+        throw new BuilderRefinementError(`Context cannot fit.${detail}`);
+      }
+
+      function plannedCompactMemory(
+        plan: ReturnType<typeof planModelContext>,
+      ): string | undefined {
+        return compactConversationMemory(
+          refinementWorkspace.chat.compactMemory,
+          uncompactedRecentTurns.filter((message) =>
+            plan.excludedMessageIds.includes(message.id),
+          ),
+        );
+      }
     },
   );
+}
+
+function measureTurnTiming(
+  startedAt: number,
+  firstOutputAt: number | null,
+): { durationMs: number; thinkingMs: number } {
+  const finishedAt = Date.now();
+  const durationMs = Math.max(0, finishedAt - startedAt);
+  const thinkingMs = Math.min(
+    durationMs,
+    Math.max(0, (firstOutputAt ?? finishedAt) - startedAt),
+  );
+  return { durationMs, thinkingMs };
 }
 
 export class BuilderRefinementError extends Error {

@@ -1,8 +1,10 @@
 import {
   bootstrapBuilderFromFileAction,
+  compileBuilderPreviewAction,
   convertArticleImageToJpegAction,
   getBuilderUploadPreviewAction,
   getBuilderWorkspaceAction,
+  formatBuilderArticleSourceAction,
   runBuilderActionAction,
   uploadBuilderReferencesAction,
   type ActionResult,
@@ -36,6 +38,17 @@ export async function fetchWorkspace(
   environment: BuilderEnvironment,
 ): Promise<BuilderWorkspace> {
   return unwrap(await getBuilderWorkspaceAction(reference(environment)));
+}
+
+export async function formatBuilderArticleSource(source: string): Promise<string> {
+  return unwrap(await formatBuilderArticleSourceAction(source));
+}
+
+export async function compileBuilderPreview(
+  environment: BuilderEnvironment,
+  source: string,
+): Promise<string> {
+  return unwrap(await compileBuilderPreviewAction(reference(environment), source));
 }
 
 export async function runBuilderAction(

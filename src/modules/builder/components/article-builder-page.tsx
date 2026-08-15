@@ -25,6 +25,7 @@ import {
   serializeEnvironmentContext,
 } from "@/modules/builder/ai/prompt";
 import { estimateContextMeter } from "@/modules/builder/content/context-budget";
+import { toggleVersionDiff } from "@/modules/builder/core/conversation-turn";
 
 type MobileView = "conversation" | "workbench";
 
@@ -137,8 +138,9 @@ export function ArticleBuilderPage() {
   }
 
   function viewVersionDiff(versionId: string) {
+    const nextDiffVersionId = toggleVersionDiff(diffVersionId, versionId);
     controller.selectVersion(versionId);
-    setDiffVersionId(versionId);
+    setDiffVersionId(nextDiffVersionId);
     setWorkbenchTab("source");
     setMobileView("workbench");
   }
@@ -197,6 +199,7 @@ export function ArticleBuilderPage() {
             streamStatus={controller.streamStatus}
             contextPercentage={contextMeter.percentage}
             historyCompacted={contextMeter.historyCompacted}
+            diffVersionId={diffVersionId}
             onPromptChange={controller.setPrompt}
             onSelectedUploadIdsChange={controller.setSelectedUploadIds}
             onUpload={controller.addUploads}

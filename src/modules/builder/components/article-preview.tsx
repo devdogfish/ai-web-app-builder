@@ -1,6 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
 import { createPreviewDocument } from "@/modules/builder/preview/create-preview-document";
 import type {
@@ -10,6 +16,8 @@ import type {
 import { previewProfileHasAssets } from "@/modules/builder/preview/site-profiles";
 import { BUILDER_LIMITS } from "@/modules/builder/config/builder";
 import type { BuilderArticleImage } from "@/modules/builder/core/contracts";
+import { compileBuilderPreview } from "@/modules/builder/core/client";
+import { useBuilderEnvironment } from "@/modules/builder/environment/provider";
 
 export function ArticlePreview({
   source,
@@ -26,7 +34,17 @@ export function ArticlePreview({
   images: readonly BuilderArticleImage[];
   onRuntimeError: (error: string) => void;
 }) {
+  const environment = useBuilderEnvironment();
   const frameRef = useRef<HTMLIFrameElement>(null);
+  const [compiledResult, setCompiledResult] = useState<{
+    source: string;
+    html: string;
+  } | null>(null);
+  const compiledSource = source.includes("<Component")
+    ? compiledResult?.source === source
+      ? compiledResult.html
+      : null
+    : source;
   const assetOrigin = useSyncExternalStore(
     subscribeToOrigin,
     readBrowserOrigin,
@@ -35,10 +53,32 @@ export function ArticlePreview({
   const needsAssetOrigin =
     previewProfileHasAssets(siteProfile) || images.length > 0;
 
+  useEffect(() => {
+    let active = true;
+    if (!source.includes("<Component")) {
+      return () => {
+        active = false;
+      };
+    }
+    compileBuilderPreview(environment, source)
+      .then((compiled) => {
+        if (active) setCompiledResult({ source, html: compiled });
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        onRuntimeError(
+          error instanceof Error ? error.message : "Preview compilation failed.",
+        );
+      });
+    return () => {
+      active = false;
+    };
+  }, [environment, onRuntimeError, source]);
+
   const srcDoc = useMemo(
     () =>
-      !needsAssetOrigin || assetOrigin
-        ? createPreviewDocument(source, assetPolicy, {
+      compiledSource !== null && (!needsAssetOrigin || assetOrigin)
+        ? createPreviewDocument(compiledSource, assetPolicy, {
             siteProfile,
             assetOrigin: assetOrigin ?? undefined,
             imageFallbacks: images.map((image) => ({
@@ -50,7 +90,14 @@ export function ArticlePreview({
             })),
           })
         : null,
-    [source, assetPolicy, siteProfile, assetOrigin, needsAssetOrigin, images],
+    [
+      compiledSource,
+      assetPolicy,
+      siteProfile,
+      assetOrigin,
+      needsAssetOrigin,
+      images,
+    ],
   );
 
   useEffect(() => {

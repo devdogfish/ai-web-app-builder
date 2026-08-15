@@ -216,6 +216,8 @@ export function useBuilderController() {
       versionId: null,
       uploadIds: selectedUploadIds,
       errorCode: null,
+      durationMs: null,
+      thinkingMs: null,
       createdAt: new Date().toISOString(),
     };
     setWorkspace((current) =>

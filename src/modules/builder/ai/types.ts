@@ -34,6 +34,7 @@ export type SelectedUploadExtract = Readonly<{
   text: string;
   mediaType?: string;
   dataUrl?: string;
+  dataUrls?: readonly string[];
 }>;
 
 /**
@@ -43,15 +44,24 @@ export type SelectedUploadExtract = Readonly<{
 export type ArticleEnvironmentContext = Readonly<BuilderEnvironment>;
 
 export type ArticleModelRequest = Readonly<{
+  /** Canonical Article Source. May contain managed Component directives. */
   currentArticleHtml: string;
   currentPrompt: string;
   selectedUploadExtracts?: readonly SelectedUploadExtract[];
   recentRelevantTurns?: readonly ArticleConversationTurn[];
   compactMemory?: string;
   environmentContext?: ArticleEnvironmentContext;
+  /** Compact active Component names and descriptions; never implementation HTML. */
+  componentIndex?: string;
+  /** Specs only for Components used by, or likely relevant to, this request. */
+  componentSpecs?: readonly string[];
 }>;
 
 export type ArticleModelResult =
+  | Readonly<{
+      action: "load_components";
+      types: readonly string[];
+    }>
   | Readonly<{
       action: "answer";
       response: string;

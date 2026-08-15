@@ -141,6 +141,7 @@ export function planModelContext(input: {
   compactMemory?: string | null;
   currentRequest: string;
   currentDocument: string;
+  additionalFixedContent?: readonly string[];
   recentMessages: readonly ContextMessage[];
   selectedUploads?: readonly ContextUpload[];
   options?: ContextBudgetOptions;
@@ -165,7 +166,11 @@ export function planModelContext(input: {
     itemTokens(input.systemInstructions) +
     (input.compactMemory ? itemTokens(input.compactMemory) : 0) +
     itemTokens(input.currentRequest) +
-    itemTokens(input.currentDocument);
+    itemTokens(input.currentDocument) +
+    (input.additionalFixedContent ?? []).reduce(
+      (sum, content) => sum + itemTokens(content),
+      0,
+    );
   const uploadTokens = selectedUploads.map((upload) => ({
     ...upload,
     estimatedTokens: itemTokens(upload.text),

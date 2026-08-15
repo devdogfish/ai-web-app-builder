@@ -2,12 +2,21 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildModelUploadText,
+  docxVisualContextNote,
   serializeModelUpload,
 } from "../uploads/model-content";
 import { formatHtmlSource } from "../content/format-html";
 import { formatModelPayload } from "../uploads/format-model-payload";
 
 describe("model upload content", () => {
+  it("states explicitly when DOCX visual rendering is unavailable", () => {
+    expect(docxVisualContextNote(0)).toContain(
+      "use the structural extract only",
+    );
+    expect(docxVisualContextNote(2)).toContain(
+      "2 rendered Word page images are attached",
+    );
+  });
   it("preserves the stored parsed content used by the model", () => {
     expect(
       buildModelUploadText({

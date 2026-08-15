@@ -17,6 +17,8 @@ export interface BuilderMessage {
   versionId: string | null;
   uploadIds: string[];
   errorCode: string | null;
+  durationMs: number | null;
+  thinkingMs: number | null;
   createdAt: string;
 }
 

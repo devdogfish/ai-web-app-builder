@@ -32,3 +32,9 @@ export function serializeModelUpload(upload: {
 ${upload.text}
 </reference-upload>`;
 }
+
+export function docxVisualContextNote(pageCount: number): string {
+  return pageCount === 0
+    ? "[Visual page rendering unavailable; use the structural extract only and do not claim visual recognition.]"
+    : `[${pageCount} rendered Word page image${pageCount === 1 ? " is" : "s are"} attached in document order.]`;
+}

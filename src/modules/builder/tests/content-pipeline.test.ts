@@ -397,6 +397,30 @@ describe("context budget", () => {
     expect(result.blocked).toBe(true);
     expect(result.blockingUpload?.name).toBe("large.txt");
   });
+
+  it("budgets the Component index and progressively loaded specs as essentials", () => {
+    const withoutComponents = planModelContext({
+      systemInstructions: "sys",
+      currentRequest: "request",
+      currentDocument: "<p>article</p>",
+      recentMessages: [],
+      options: { maxContextTokens: 80, reservedOutputTokens: 0 },
+    });
+    const withComponents = planModelContext({
+      systemInstructions: "sys",
+      currentRequest: "request",
+      currentDocument: "<p>article</p>",
+      additionalFixedContent: ["component spec ".repeat(80)],
+      recentMessages: [],
+      options: { maxContextTokens: 80, reservedOutputTokens: 0 },
+    });
+
+    expect(withoutComponents.blocked).toBe(false);
+    expect(withComponents.blocked).toBe(true);
+    expect(withComponents.estimatedTokens).toBeGreaterThan(
+      withoutComponents.estimatedTokens,
+    );
+  });
 });
 
 describe("article source validation", () => {

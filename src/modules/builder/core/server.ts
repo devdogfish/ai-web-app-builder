@@ -80,6 +80,8 @@ export function toBuilderWorkspace(
         .filter((upload) => upload.messageId === message.id)
         .map((upload) => upload.id),
       errorCode: message.errorCode,
+      durationMs: message.durationMs,
+      thinkingMs: message.thinkingMs,
       createdAt: message.createdAt.toISOString(),
     })),
     versions: workspace.versions.map((version) => ({

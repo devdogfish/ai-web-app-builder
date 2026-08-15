@@ -5,17 +5,147 @@ import { html } from "@codemirror/lang-html";
 import { unifiedMergeView } from "@codemirror/merge";
 import { redo, undo } from "@codemirror/commands";
 import { openSearchPanel } from "@codemirror/search";
-import { EditorState } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import {
+  EditorState,
+  RangeSetBuilder,
+  StateField,
+  type Extension,
+} from "@codemirror/state";
+import {
+  Decoration,
+  EditorView,
+  WidgetType,
+  type DecorationSet,
+} from "@codemirror/view";
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 
 import { vscodeSearchPanel } from "@/modules/builder/components/editor-search-panel";
+import {
+  findManagedComponentReferenceRanges,
+  type ManagedComponentReferenceRange,
+} from "@/modules/builder/components/managed-component-source";
 import { cn } from "@/modules/builder/utils";
+
+export {
+  findManagedComponentReferenceRanges,
+  type ManagedComponentReferenceRange,
+} from "@/modules/builder/components/managed-component-source";
 
 export interface SourceEditorHandle {
   undo: () => void;
   redo: () => void;
   find: () => void;
+}
+
+class ManagedComponentWidget extends WidgetType {
+  constructor(
+    readonly reference: ManagedComponentReferenceRange,
+    readonly onClick: (reference: ManagedComponentReferenceRange) => void,
+    readonly disabled: boolean,
+  ) {
+    super();
+  }
+
+  eq(other: ManagedComponentWidget) {
+    return (
+      other.reference.type === this.reference.type &&
+      other.reference.index === this.reference.index &&
+      other.disabled === this.disabled &&
+      other.onClick === this.onClick
+    );
+  }
+
+  toDOM() {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "cm-managed-component";
+    button.disabled = this.disabled;
+    button.setAttribute(
+      "aria-label",
+      `Edit managed ${this.reference.type} Component`,
+    );
+    button.textContent = `<Component type="${this.reference.type}" />`;
+    button.addEventListener("click", () => this.onClick(this.reference));
+    return button;
+  }
+
+  ignoreEvent() {
+    return false;
+  }
+}
+
+function managedComponentWidgets(
+  onClick: (reference: ManagedComponentReferenceRange) => void,
+  disabled: boolean,
+): Extension {
+  const decorations = StateField.define<DecorationSet>({
+    create(state) {
+      return buildManagedComponentDecorations(state, onClick, disabled);
+    },
+    update(current, transaction) {
+      if (!transaction.docChanged) return current;
+      return buildManagedComponentDecorations(
+        transaction.state,
+        onClick,
+        disabled,
+      );
+    },
+    provide: (field) => [
+      EditorView.decorations.from(field),
+      EditorView.atomicRanges.of((view) => view.state.field(field)),
+    ],
+  });
+
+  return [
+    decorations,
+    EditorView.theme({
+      ".cm-managed-component": {
+        display: "inline-flex",
+        alignItems: "center",
+        maxWidth: "100%",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius-md)",
+        backgroundColor: "var(--muted)",
+        color: "var(--foreground)",
+        padding: "0.125rem 0.5rem",
+        fontFamily: "var(--font-mono, monospace)",
+        fontSize: "0.8125rem",
+        fontWeight: "600",
+        lineHeight: "1.5",
+        cursor: "pointer",
+      },
+      ".cm-managed-component:hover": {
+        backgroundColor: "var(--accent)",
+      },
+      ".cm-managed-component:focus-visible": {
+        outline: "2px solid var(--ring)",
+        outlineOffset: "1px",
+      },
+      ".cm-managed-component:disabled": {
+        cursor: "default",
+        opacity: "0.65",
+      },
+    }),
+  ];
+}
+
+function buildManagedComponentDecorations(
+  state: EditorState,
+  onClick: (reference: ManagedComponentReferenceRange) => void,
+  disabled: boolean,
+) {
+  const builder = new RangeSetBuilder<Decoration>();
+  const references = findManagedComponentReferenceRanges(state.doc.toString());
+  for (const reference of references) {
+    builder.add(
+      reference.from,
+      reference.to,
+      Decoration.replace({
+        widget: new ManagedComponentWidget(reference, onClick, disabled),
+      }),
+    );
+  }
+  return builder.finish();
 }
 
 export const SourceEditor = forwardRef<
@@ -27,6 +157,9 @@ export const SourceEditor = forwardRef<
     readOnly?: boolean;
     ariaLabel?: string;
     className?: string;
+    onManagedComponentClick?: (
+      reference: ManagedComponentReferenceRange,
+    ) => void;
   }
 >(function SourceEditor(
   {
@@ -36,15 +169,19 @@ export const SourceEditor = forwardRef<
     readOnly = false,
     ariaLabel = "HTML source",
     className,
+    onManagedComponentClick,
   },
   ref,
 ) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
+  const onManagedComponentClickRef = useRef(onManagedComponentClick);
   const valueRef = useRef(value);
   onChangeRef.current = onChange;
+  onManagedComponentClickRef.current = onManagedComponentClick;
   valueRef.current = value;
+  const hasManagedComponentClick = onManagedComponentClick !== undefined;
 
   useImperativeHandle(ref, () => ({
     undo: () => void (viewRef.current && undo(viewRef.current)),
@@ -222,6 +359,14 @@ export const SourceEditor = forwardRef<
         if (update.docChanged) onChangeRef.current(update.state.doc.toString());
       }),
     ];
+    if (hasManagedComponentClick) {
+      extensions.push(
+        managedComponentWidgets(
+          (reference) => onManagedComponentClickRef.current?.(reference),
+          readOnly,
+        ),
+      );
+    }
     if (original !== undefined) {
       extensions.push(unifiedMergeView({ original, mergeControls: false }));
     }
@@ -234,7 +379,7 @@ export const SourceEditor = forwardRef<
       view.destroy();
       viewRef.current = null;
     };
-  }, [ariaLabel, original, readOnly]);
+  }, [ariaLabel, hasManagedComponentClick, original, readOnly]);
 
   useEffect(() => {
     const view = viewRef.current;

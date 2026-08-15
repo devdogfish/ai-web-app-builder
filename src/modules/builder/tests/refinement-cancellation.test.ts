@@ -43,6 +43,8 @@ vi.mock("../core/server", () => ({
         versionId: null,
         uploadIds: [],
         errorCode: message.errorCode,
+        durationMs: message.durationMs,
+        thinkingMs: message.thinkingMs,
         createdAt: message.createdAt.toISOString(),
       })) ?? [],
     versions:
@@ -136,6 +138,8 @@ describe("Builder refinement cancellation", () => {
         content: "Generation stopped.",
         status: "stopped",
         errorCode: "cancelled",
+        durationMs: expect.any(Number),
+        thinkingMs: expect.any(Number),
       }),
     ]);
     expect(workspace.versions).toHaveLength(1);
@@ -169,5 +173,58 @@ describe("Builder refinement cancellation", () => {
 
     expect(workspace.versions).toHaveLength(1);
     expect(workspace.articleHtml).toBe("<article><p>Before</p></article>");
+  });
+
+  it("loads requested Component specs and then completes the same turn", async () => {
+    const requests: Array<{
+      componentIndex?: string;
+      componentSpecs?: readonly string[];
+    }> = [];
+    vi.mocked(createArticleModelFromEnv).mockReturnValue({
+      provider: "openrouter",
+      model: "test",
+      async *stream(request) {
+        requests.push(request);
+        if (requests.length === 1) {
+          yield {
+            type: "finish",
+            result: {
+              action: "load_components",
+              types: ["image-carousel"],
+            },
+          } as const;
+          return;
+        }
+        yield {
+          type: "finish",
+          result: {
+            action: "answer",
+            response: "The Component spec is loaded.",
+          },
+        } as const;
+      },
+    });
+
+    const workspace = await runBuilderRefinement(environment, {
+      prompt: "Review the introduction.",
+      uploadIds: [],
+    });
+
+    expect(requests).toHaveLength(2);
+    expect(requests[0]?.componentIndex).toContain("image-carousel");
+    expect(requests[0]?.componentSpecs?.join("\n")).not.toContain(
+      '"type": "image-carousel"',
+    );
+    expect(requests[1]?.componentSpecs?.join("\n")).toContain(
+      '"type": "image-carousel"',
+    );
+    expect(requests[1]?.componentSpecs?.join("\n")).not.toContain(
+      "htmlTemplate",
+    );
+    expect(workspace.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: "The Component spec is loaded.",
+      status: "complete",
+    });
   });
 });

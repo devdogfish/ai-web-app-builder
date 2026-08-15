@@ -3,6 +3,7 @@ import Database from "better-sqlite3";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 
 import { formatArticleHtml } from "../content";
 import { createArticleRepository } from "../db";
@@ -37,6 +38,67 @@ function commitAssistant(
 }
 
 describe("ArticleRepository", () => {
+  it("stores Article Source in versions and compiled HTML in the host outbox", () => {
+    const repository = createTestRepository();
+    const baseline = repository.bootstrapArticle({
+      article: { id: "article-1", website: "news", articleType: "story" },
+      html: "<p>Before</p>",
+      hostHtml: "<p>Before</p>",
+    });
+    const baselineTask = repository.getPendingHostSync("article-1")[0];
+    repository.completeHostSync(baselineTask!.versionId);
+
+    const source = '<Component type="tabs" data={{ tabs: [] }} />';
+    const compiled = '<section class="tabs"></section>';
+    repository.applySource({
+      articleId: "article-1",
+      html: source,
+      hostHtml: compiled,
+    });
+
+    const workspace = repository.getWorkspace("article-1");
+    const [task] = repository.getPendingHostSync("article-1");
+    expect(workspace?.article.html).toBe(source);
+    expect(workspace?.currentVersion.html).toBe(source);
+    expect(task?.html).toBe(compiled);
+    expect(task?.sha256).toBe(hash(compiled));
+    expect(task?.expectedPreviousSha256).toBe(baselineTask?.sha256);
+    expect(workspace?.currentVersion.id).toBe(baseline.currentVersion.id);
+
+    repository.close();
+  });
+
+  it("queues a fresh compiled handoff when the managed source is unchanged", () => {
+    const repository = createTestRepository();
+    const source = '<Component type="tabs" data={{ tabs: [] }} />';
+    const firstCompiled = '<section class="tabs old"></section>';
+    const workspace = repository.bootstrapArticle({
+      article: { id: "article-1", website: "news", articleType: "story" },
+      html: source,
+      hostHtml: firstCompiled,
+    });
+    repository.completeHostSync(workspace.currentVersion.id);
+
+    const nextCompiled = '<section class="tabs new"></section>';
+    repository.applySource({
+      articleId: "article-1",
+      html: source,
+      hostHtml: nextCompiled,
+    });
+
+    expect(repository.getWorkspace("article-1")?.currentVersion.html).toBe(
+      source,
+    );
+    expect(repository.getPendingHostSync("article-1")).toEqual([
+      expect.objectContaining({
+        html: nextCompiled,
+        sha256: hash(nextCompiled),
+        expectedPreviousSha256: hash(firstCompiled),
+      }),
+    ]);
+    repository.close();
+  });
+
   it("upgrades a local messages table with durable error codes", () => {
     const sqlite = new Database(":memory:");
     sqlite.exec(`
@@ -612,3 +674,7 @@ describe("ArticleRepository", () => {
     repository.close();
   });
 });
+
+function hash(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}

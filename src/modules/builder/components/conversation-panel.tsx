@@ -4,11 +4,14 @@ import Image from "next/image";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIcon,
+  BrainCircuitIcon,
+  Clock3Icon,
   FilePenLineIcon,
   FileTextIcon,
   PaperclipIcon,
   PlusIcon,
   RotateCcwIcon,
+  SearchIcon,
   SendIcon,
   SquareIcon,
   Undo2Icon,
@@ -51,7 +54,6 @@ import {
   InputGroupTextarea,
 } from "@/modules/builder/ui/input-group";
 import { ScrollArea } from "@/modules/builder/ui/scroll-area";
-import { Spinner } from "@/modules/builder/ui/spinner";
 import {
   Tooltip,
   TooltipContent,
@@ -69,6 +71,10 @@ import {
   countVersionDiffLines,
   type VersionDiffStats,
 } from "@/modules/builder/core/version-diff";
+import {
+  assistantTurnStatusLabel,
+  formatTurnDuration,
+} from "@/modules/builder/core/conversation-turn";
 import type { BuilderEnvironment } from "@/modules/builder/environment/types";
 import { cn } from "@/modules/builder/utils";
 
@@ -81,6 +87,7 @@ export function ConversationPanel({
   streamStatus,
   contextPercentage,
   historyCompacted,
+  diffVersionId,
   onPromptChange,
   onSelectedUploadIdsChange,
   onUpload,
@@ -98,6 +105,7 @@ export function ConversationPanel({
   streamStatus: string | null;
   contextPercentage: number;
   historyCompacted: boolean;
+  diffVersionId: string | null;
   onPromptChange: (prompt: string) => void;
   onSelectedUploadIdsChange: (ids: string[]) => void;
   onUpload: (files: File[]) => Promise<void> | void;
@@ -180,6 +188,14 @@ export function ConversationPanel({
     return () => observer.disconnect();
   }, [isPromptMultiline, prompt]);
 
+  const activeRequest = [...workspace.messages]
+    .reverse()
+    .find((message) => message.role === "user" && message.kind === "chat");
+  const activeUploadNames = (activeRequest?.uploadIds ?? []).flatMap((id) => {
+    const upload = workspace.uploads.find((item) => item.id === id);
+    return upload ? [upload.name] : [];
+  });
+
   return (
     <Card className="min-h-svh gap-0 rounded-none bg-muted/55 py-0 ring-0 lg:h-full lg:min-h-0">
       <header className="flex h-12 shrink-0 items-center justify-between border-b bg-white pr-3 pl-12">
@@ -222,7 +238,7 @@ export function ConversationPanel({
           <div
             role="log"
             aria-label="Conversation"
-            className="mx-auto flex w-full max-w-3xl flex-col gap-8 px-3 py-5 sm:px-4 sm:py-6"
+            className="mx-auto flex w-full max-w-3xl flex-col gap-7 px-3 py-5 sm:px-4 sm:py-6"
           >
             {workspace.messages.length === 0 ? (
               <div className="flex min-h-48 items-center justify-center text-center">
@@ -237,12 +253,35 @@ export function ConversationPanel({
                 </div>
               </div>
             ) : null}
-            {workspace.messages.map((message) => {
+            {workspace.messages.map((message, messageIndex) => {
               const version = workspace.versions.find(
                 (item) => item.id === message.versionId,
               );
               const isVersionEvent =
                 message.kind === "source_apply" || message.kind === "rewind";
+              const precedingMessage = workspace.messages[messageIndex - 1];
+              const requestMessage =
+                message.role === "assistant" &&
+                message.kind === "chat" &&
+                precedingMessage?.role === "user" &&
+                precedingMessage.kind === "chat"
+                  ? precedingMessage
+                  : null;
+              const inferredDurationMs = requestMessage
+                ? Math.max(
+                    0,
+                    new Date(message.createdAt).getTime() -
+                      new Date(requestMessage.createdAt).getTime(),
+                  )
+                : null;
+              const durationMs = message.durationMs ?? inferredDurationMs;
+              const thinkingMs = message.thinkingMs ?? durationMs;
+              const activityUploadNames = (
+                requestMessage?.uploadIds ?? []
+              ).flatMap((id) => {
+                const upload = workspace.uploads.find((item) => item.id === id);
+                return upload ? [upload.name] : [];
+              });
 
               if (message.role === "user" && !isVersionEvent) {
                 return (
@@ -263,6 +302,7 @@ export function ConversationPanel({
                         <p className="whitespace-pre-wrap">{message.content}</p>
                       </div>
                     ) : null}
+                    <UserTurnMeta createdAt={message.createdAt} />
                   </article>
                 );
               }
@@ -270,8 +310,14 @@ export function ConversationPanel({
               return (
                 <article
                   key={message.id}
-                  className="flex min-w-0 flex-col gap-3"
+                  className="flex min-w-0 flex-col gap-4"
                 >
+                  {message.role === "assistant" && message.kind === "chat" ? (
+                    <TurnActivity
+                      thinkingMs={thinkingMs}
+                      uploadNames={activityUploadNames}
+                    />
+                  ) : null}
                   {!isVersionEvent ? (
                     <p className="whitespace-pre-wrap text-sm leading-[1.55]">
                       {message.content}
@@ -290,6 +336,7 @@ export function ConversationPanel({
                       version={version}
                       diff={versionDiffs.get(version.id) ?? ZERO_DIFF}
                       isCurrent={version.id === workspace.currentVersionId}
+                      active={version.id === diffVersionId}
                       disabled={generating}
                       onViewDiff={() => onViewVersionDiff(version.id)}
                       onRestore={() => onRestoreVersion(version.id)}
@@ -298,16 +345,18 @@ export function ConversationPanel({
                   <TurnMeta
                     kind={message.kind}
                     status={message.status}
+                    role={message.role}
+                    durationMs={durationMs}
                     createdAt={message.createdAt}
                   />
                 </article>
               );
             })}
             {generating ? (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Spinner />
-                {streamStatus ?? "Working…"}
-              </div>
+              <LiveTurnActivity
+                status={streamStatus}
+                uploadNames={activeUploadNames}
+              />
             ) : null}
           </div>
         </ScrollArea>
@@ -763,10 +812,105 @@ function fileExtension(name: string): string {
   return match?.[1]?.toUpperCase() ?? "";
 }
 
+function UserTurnMeta({ createdAt }: { createdAt: string }) {
+  const relativeTime = formatRelativeTime(createdAt);
+
+  return (
+    <span className="flex items-center gap-1.5 pr-1 text-[11px] text-muted-foreground">
+      <Clock3Icon className="size-3" />
+      <time
+        dateTime={createdAt}
+        title={new Date(createdAt).toLocaleString()}
+        aria-label={`User message sent ${relativeTime}`}
+      >
+        {relativeTime}
+      </time>
+    </span>
+  );
+}
+
+function TurnActivity({
+  thinkingMs,
+  uploadNames,
+}: {
+  thinkingMs: number | null;
+  uploadNames: string[];
+}) {
+  return (
+    <div
+      className="flex flex-col gap-3 text-xs text-muted-foreground"
+      aria-label="Assistant activity"
+    >
+      <div className="flex items-center gap-2">
+        <BrainCircuitIcon className="size-4" />
+        <span>Thought for {formatTurnDuration(thinkingMs ?? 0)}</span>
+      </div>
+      <div className="flex items-center gap-2">
+        <SearchIcon className="size-4" />
+        <span>Read article</span>
+      </div>
+      {uploadNames.map((name, index) => (
+        <div
+          key={`${name}-${index}`}
+          className="flex min-w-0 items-center gap-2"
+        >
+          <FileTextIcon className="size-4 shrink-0" />
+          <span className="truncate">Read {name}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function LiveTurnActivity({
+  status,
+  uploadNames,
+}: {
+  status: string | null;
+  uploadNames: string[];
+}) {
+  const [elapsedMs, setElapsedMs] = useState(0);
+
+  useEffect(() => {
+    const interval = window.setInterval(
+      () => setElapsedMs((current) => current + 1_000),
+      1_000,
+    );
+    return () => window.clearInterval(interval);
+  }, []);
+
+  return (
+    <article className="flex min-w-0 flex-col gap-3 text-xs text-muted-foreground">
+      <div className="flex items-center gap-2" aria-live="polite">
+        <BrainCircuitIcon className="size-4 animate-pulse" />
+        <span>
+          {status === "Stopping…"
+            ? `Stopping after ${formatTurnDuration(elapsedMs)}`
+            : `Thinking for ${formatTurnDuration(elapsedMs)}`}
+        </span>
+      </div>
+      <div className="flex items-center gap-2">
+        <SearchIcon className="size-4" />
+        <span>Read article</span>
+      </div>
+      {uploadNames.map((name, index) => (
+        <div
+          key={`${name}-${index}`}
+          className="flex min-w-0 items-center gap-2"
+        >
+          <FileTextIcon className="size-4 shrink-0" />
+          <span className="truncate">Read {name}</span>
+        </div>
+      ))}
+    </article>
+  );
+}
+
 function VersionRow({
   version,
   diff,
   isCurrent,
+  active,
   disabled,
   onViewDiff,
   onRestore,
@@ -774,12 +918,13 @@ function VersionRow({
   version: BuilderWorkspace["versions"][number];
   diff: VersionDiffStats;
   isCurrent: boolean;
+  active: boolean;
   disabled: boolean;
   onViewDiff: () => void;
   onRestore: () => void;
 }) {
   return (
-    <div className="flex h-10 w-full items-center gap-1 rounded-lg border bg-background pr-1.5 pl-3 shadow-xs">
+    <div className="flex min-h-12 w-full items-center gap-1 rounded-xl border bg-background pr-2 pl-3.5 shadow-xs">
       <div className="flex min-w-0 flex-1 items-baseline gap-2">
         <span className="min-w-0 truncate text-[0.8125rem] font-medium">
           {version.summary}
@@ -793,10 +938,11 @@ function VersionRow({
           render={
             <Button
               type="button"
-              variant="outline"
+              variant={active ? "secondary" : "outline"}
               size="xs"
               className="gap-0.5 px-1.5 tabular-nums shadow-none"
-              aria-label={`View diff for version ${version.number}: ${diff.additions} additions, ${diff.deletions} deletions`}
+              aria-pressed={active}
+              aria-label={`${active ? "Hide" : "View"} diff for version ${version.number}: ${diff.additions} additions, ${diff.deletions} deletions`}
               disabled={disabled || version.parentVersionId === null}
               onClick={onViewDiff}
             />
@@ -806,7 +952,7 @@ function VersionRow({
           <span className="text-muted-foreground">/</span>
           <span className="text-destructive">-{diff.deletions}</span>
         </TooltipTrigger>
-        <TooltipContent>View diff</TooltipContent>
+        <TooltipContent>{active ? "Hide diff" : "View diff"}</TooltipContent>
       </Tooltip>
       <Tooltip>
         <TooltipTrigger
@@ -832,13 +978,15 @@ function VersionRow({
 const ZERO_DIFF: VersionDiffStats = { additions: 0, deletions: 0 };
 
 function TurnMeta({
+  role,
   kind,
   status,
+  durationMs,
   createdAt,
 }: Pick<
   BuilderWorkspace["messages"][number],
-  "kind" | "status" | "createdAt"
->) {
+  "role" | "kind" | "status" | "createdAt"
+> & { durationMs: number | null }) {
   const isSourceEdit = kind === "source_apply";
   const isRewind = kind === "rewind";
   const Icon = isSourceEdit
@@ -846,16 +994,19 @@ function TurnMeta({
     : isRewind
       ? RotateCcwIcon
       : ActivityIcon;
-  const label =
-    status === "failed"
-      ? "Failed"
-      : status === "stopped"
-        ? "Stopped"
-        : isSourceEdit
-          ? "Edited source"
-          : isRewind
-            ? "Reverted version"
+  const label = isSourceEdit
+    ? "Edited source"
+    : isRewind
+      ? "Reverted version"
+      : role === "assistant"
+        ? assistantTurnStatusLabel(status, durationMs)
+        : status === "failed"
+          ? "Failed"
+          : status === "stopped"
+            ? "Stopped"
             : "Completed";
+  const relativeTime = formatRelativeTime(createdAt);
+  const timestampOwner = role === "assistant" ? "Assistant response" : "Event";
 
   return (
     <div
@@ -867,9 +1018,16 @@ function TurnMeta({
         <Icon className="size-3.5" />
         {label}
       </span>
-      <time dateTime={createdAt} title={new Date(createdAt).toLocaleString()}>
-        {formatRelativeTime(createdAt)}
-      </time>
+      <span className="flex shrink-0 items-center gap-1.5">
+        <Clock3Icon className="size-3.5" />
+        <time
+          dateTime={createdAt}
+          title={new Date(createdAt).toLocaleString()}
+          aria-label={`${timestampOwner} sent ${relativeTime}`}
+        >
+          {relativeTime}
+        </time>
+      </span>
     </div>
   );
 }

@@ -20,6 +20,7 @@ export const articles = sqliteTable(
     articleType: text("article_type").notNull(),
     title: text("title").notNull().default(""),
     html: text("html").notNull().default(""),
+    hostHtmlSha256: text("host_html_sha256"),
     createdAt: timestamp("created_at"),
     updatedAt: timestamp("updated_at"),
   },
@@ -59,6 +60,8 @@ export const messages = sqliteTable(
       .notNull()
       .default("complete"),
     errorCode: text("error_code"),
+    durationMs: integer("duration_ms"),
+    thinkingMs: integer("thinking_ms"),
     createdAt: timestamp("created_at"),
   },
   (table) => [

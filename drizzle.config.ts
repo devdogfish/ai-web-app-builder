@@ -4,6 +4,7 @@ export default defineConfig({
   schema: [
     "./src/modules/builder/db/schema.ts",
     "./src/modules/article-images/db/schema.ts",
+    "./src/modules/components/db/schema.ts",
   ],
   out: "./src/modules/builder/db/migrations",
   dialect: "sqlite",

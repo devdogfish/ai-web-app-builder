@@ -1,6 +1,6 @@
 # News Article Content Builder
 
-Single-page Next.js Workbench for conversational Article HTML creation and refinement. The feature is a vertical module under `src/modules/builder`; the App Router files only compose it into this standalone development shell.
+Next.js Workbench for conversational Article creation and reusable, managed article Components. The features are vertical modules under `src/modules/builder` and `src/modules/components`; App Router files only compose them into this standalone development shell.
 
 ## Run
 
@@ -12,9 +12,12 @@ bun dev
 
 Open `http://localhost:3000`. Article identity and website selection live only in React context state and reset to local RBCCM defaults on refresh. Each website uses a separate local Article so switching websites cannot cross Article ownership boundaries.
 
+Open `http://localhost:3000/components` to create, edit, or delete reusable Components.
+
 ## Module integration
 
 - `src/modules/builder/components`: complete Builder UI.
+- `src/modules/components`: Component contracts, strict data schemas, restricted Article Source parser, compiler, built-ins, persistence, and UI. A Component is one self-contained HTML snippet; inline `<style>` and `<script>` tags are supported.
 - `src/modules/builder/environment/request-resolver.ts`: replace the development resolver with the host application's authenticated Article lookup. Production fails closed until wired. The selected `website` derives its fixed CMS, Article type, preview, asset, and image settings.
 - `src/modules/builder/environment/article-integration.ts`: read/write the host Article HTML field. Pre-existing HTML becomes baseline Version 1 without an AI call. A durable outbox retries writes in Version order; the host adapter must enforce the supplied idempotency ID and expected-previous hash.
 - `src/modules/builder/uploads/storage.ts`: swap `LocalUploadStore` for deployed object/blob storage without touching UI or persistence.
@@ -25,6 +28,12 @@ Open `http://localhost:3000`. Article identity and website selection live only i
 - `src/modules/builder/scripts/sync-preview-assets.mjs`: refresh the RBCCM non-image mirror with `bun run sync:preview-assets`.
 
 The top-left website button changes only the selected website. Everything else is immutable website configuration in `src/modules/builder/environment/websites.ts`.
+
+Canonical Article Source is ordinary HTML plus managed references such as `<Component type="tabs" data={{ ... }} />`. CodeMirror displays each reference as a single atomic `<Component type="tabs" />` token; clicking it opens the schema-driven data editor. Component HTML stays centralized and unavailable to the LLM. Preview and CMS sync compile references into plain HTML snapshots. Detaching a reference, or deleting its Component definition, permanently materializes its current HTML.
+
+The model always receives the compact Component name/description index and receives full data specs only for Components already used, likely relevant, or explicitly requested through the bounded progressive-disclosure protocol. Word imports provide both structural extraction and bounded rendered page images for high-confidence Component recognition; ambiguous structures remain ordinary HTML.
+
+Rendered Word-page recognition requires LibreOffice's `soffice` and Poppler's `pdftoppm` executables on the server `PATH`. Rendering is best-effort and capped at six pages/15 MB. When either runtime is unavailable, the model is explicitly told that no visual pages were supplied and must use only the structural extract.
 
 RBCCM production images are converted to WebP before the CMS uploader receives them. CMWeb accepts JPEG (recommended), accepts PNG with a warning, and rejects WebP.
 

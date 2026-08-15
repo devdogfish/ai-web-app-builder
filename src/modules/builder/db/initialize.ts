@@ -1,10 +1,12 @@
 import type Database from "better-sqlite3";
+import { initializeComponentsDatabase } from "../../components/db/initialize";
 
 /**
  * Local zero-config bootstrap. Drizzle migrations remain the production path;
  * this DDL intentionally mirrors schema.ts so a fresh local database just works.
  */
 export function initializeDatabase(sqlite: Database.Database): void {
+  initializeComponentsDatabase(sqlite);
   sqlite.pragma("foreign_keys = ON");
   sqlite.pragma("busy_timeout = 5000");
   sqlite.pragma("journal_mode = WAL");
@@ -15,6 +17,7 @@ export function initializeDatabase(sqlite: Database.Database): void {
       article_type TEXT NOT NULL,
       title TEXT NOT NULL DEFAULT '',
       html TEXT NOT NULL DEFAULT '',
+      host_html_sha256 TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
@@ -59,6 +62,8 @@ export function initializeDatabase(sqlite: Database.Database): void {
       status TEXT NOT NULL DEFAULT 'complete'
         CHECK (status IN ('complete', 'failed', 'stopped')),
       error_code TEXT,
+      duration_ms INTEGER,
+      thinking_ms INTEGER,
       created_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS messages_chat_created_idx
@@ -292,5 +297,18 @@ export function initializeDatabase(sqlite: Database.Database): void {
   }>;
   if (!messageColumns.some((column) => column.name === "error_code")) {
     sqlite.exec("ALTER TABLE messages ADD COLUMN error_code TEXT;");
+  }
+  if (!messageColumns.some((column) => column.name === "duration_ms")) {
+    sqlite.exec("ALTER TABLE messages ADD COLUMN duration_ms INTEGER;");
+  }
+  if (!messageColumns.some((column) => column.name === "thinking_ms")) {
+    sqlite.exec("ALTER TABLE messages ADD COLUMN thinking_ms INTEGER;");
+  }
+
+  const articleColumns = sqlite.pragma("table_info(articles)") as Array<{
+    name: string;
+  }>;
+  if (!articleColumns.some((column) => column.name === "host_html_sha256")) {
+    sqlite.exec("ALTER TABLE articles ADD COLUMN host_html_sha256 TEXT;");
   }
 }

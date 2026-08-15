@@ -1,7 +1,9 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  BlocksIcon,
   ChevronDownIcon,
   Code2Icon,
   EyeIcon,
@@ -12,6 +14,7 @@ import {
   SearchIcon,
   Settings2Icon,
   SmartphoneIcon,
+  UnlinkIcon,
   Undo2Icon,
   WandSparklesIcon,
 } from "lucide-react";
@@ -22,13 +25,25 @@ import { PreviewDevice } from "@/modules/builder/components/preview-device";
 import {
   SourceEditor,
   type SourceEditorHandle,
+  type ManagedComponentReferenceRange,
 } from "@/modules/builder/components/source-editor";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+} from "@/modules/builder/ui/alert-dialog";
 import {
   Alert,
   AlertDescription,
   AlertTitle,
 } from "@/modules/builder/ui/alert";
-import { Button } from "@/modules/builder/ui/button";
+import { Button, buttonVariants } from "@/modules/builder/ui/button";
 import { Card, CardContent } from "@/modules/builder/ui/card";
 import {
   DropdownMenu,
@@ -50,13 +65,28 @@ import {
   TooltipTrigger,
 } from "@/modules/builder/ui/tooltip";
 import { Toggle } from "@/modules/builder/ui/toggle";
-import { formatHtmlSource } from "@/modules/builder/content/format-html";
+import { formatBuilderArticleSource } from "@/modules/builder/core/client";
 import type {
   ArticleVersion,
   BuilderArticleImage,
 } from "@/modules/builder/core/contracts";
 import type { BuilderEnvironment } from "@/modules/builder/environment/types";
 import { getWebsiteConfig } from "@/modules/builder/environment/websites";
+import { ComponentInstanceDialog } from "@/modules/components/ui/component-instance-dialog";
+import {
+  detachComponentDraftAction,
+  getComponentSpecAction,
+} from "@/modules/components/server/actions";
+import type {
+  ComponentData,
+  ComponentSpec,
+} from "@/modules/components/contracts";
+import { validateComponentData } from "@/modules/components/schema";
+import {
+  parseArticleSource,
+  serializeComponentReference,
+  unwrapComponentSourceData,
+} from "@/modules/components/source";
 
 export function WorkbenchPanel({
   environment,
@@ -107,12 +137,22 @@ export function WorkbenchPanel({
     "desktop",
   );
   const pendingApplyRef = useRef<string | null>(null);
+  const [activeComponent, setActiveComponent] = useState<{
+    index: number;
+    type: string;
+    data: ComponentData;
+  } | null>(null);
+  const [componentSpec, setComponentSpec] = useState<ComponentSpec | null>(
+    null,
+  );
+  const [componentBusy, setComponentBusy] = useState(false);
+  const [confirmDetach, setConfirmDetach] = useState(false);
   const showDiff =
     previousVersion !== null && diffVersionId === selectedVersion?.id;
 
   const formatSource = useCallback(async (source: string) => {
     try {
-      return await formatHtmlSource(source);
+      return await formatBuilderArticleSource(source);
     } catch (error) {
       toast.error(`Could not format Source: ${(error as Error).message}`);
       return null;
@@ -145,6 +185,93 @@ export function WorkbenchPanel({
     onApply,
     onDraftChange,
   ]);
+
+  const openManagedComponent = useCallback(
+    async (selected: ManagedComponentReferenceRange) => {
+      try {
+        const reference = parseArticleSource(draft).references[selected.index];
+        if (!reference || reference.type !== selected.type) {
+          toast.error("The selected Component changed. Please click it again.");
+          return;
+        }
+        const result = await getComponentSpecAction(reference.type);
+        if (!result.ok) {
+          toast.error(result.error);
+          return;
+        }
+        const providedData = unwrapComponentSourceData(
+          reference.data,
+        ) as ComponentData;
+        setComponentSpec(result.data);
+        setActiveComponent({
+          index: selected.index,
+          type: reference.type,
+          data: mergeComponentData(result.data.defaultData, providedData),
+        });
+      } catch (error) {
+        toast.error((error as Error).message);
+      }
+    },
+    [draft],
+  );
+
+  const saveComponentData = useCallback(
+    async (data: ComponentData) => {
+      if (!activeComponent || !componentSpec) return;
+      const validation = validateComponentData(componentSpec.schema, data);
+      if (!validation.valid) {
+        toast.error(
+          validation.issues[0]?.message ?? "Component data is invalid.",
+        );
+        return;
+      }
+      try {
+        const references = parseArticleSource(draft).references;
+        const reference = references[activeComponent.index];
+        if (!reference || reference.type !== activeComponent.type) {
+          throw new Error(
+            "The selected Component changed. Open it again and retry.",
+          );
+        }
+        const replacement = serializeComponentReference(
+          { type: activeComponent.type, data },
+          componentSpec.schema,
+        );
+        onDraftChange(
+          `${draft.slice(0, reference.start)}${replacement}${draft.slice(reference.end)}`,
+        );
+        setActiveComponent(null);
+        setComponentSpec(null);
+        toast.success("Component data updated.");
+      } catch (error) {
+        toast.error((error as Error).message);
+      }
+    },
+    [activeComponent, componentSpec, draft, onDraftChange],
+  );
+
+  const detachActiveComponent = useCallback(async () => {
+    if (!activeComponent) return;
+    setComponentBusy(true);
+    try {
+      const result = await detachComponentDraftAction(
+        draft,
+        activeComponent.index,
+        activeComponent.type,
+      );
+      if (!result.ok) {
+        toast.error(result.error);
+        return;
+      }
+      onDraftChange(result.data);
+      setConfirmDetach(false);
+      setActiveComponent(null);
+      setComponentSpec(null);
+      toast.success("Component detached into editable HTML.");
+    } finally {
+      setComponentBusy(false);
+    }
+  }, [activeComponent, draft, onDraftChange]);
 
   useEffect(() => {
     if (pendingApplyRef.current === null || pendingApplyRef.current !== draft) {
@@ -275,6 +402,15 @@ export function WorkbenchPanel({
                   </EditorAction>
                 </>
               ) : null}
+              <Link
+                href="/components"
+                target="_blank"
+                aria-label="Open Component Library"
+                title="Component Library"
+                className={buttonVariants({ variant: "ghost", size: "icon" })}
+              >
+                <BlocksIcon />
+              </Link>
               <DropdownMenu>
                 <DropdownMenuTrigger
                   render={
@@ -327,6 +463,7 @@ export function WorkbenchPanel({
               onChange={onDraftChange}
               original={showDiff ? previousVersion.content : undefined}
               readOnly={generating || !isCurrentVersion || showDiff}
+              onManagedComponentClick={openManagedComponent}
             />
           </TabsContent>
         </Tabs>
@@ -383,8 +520,79 @@ export function WorkbenchPanel({
           </Button>
         </Card>
       ) : null}
+      <ComponentInstanceDialog
+        key={
+          activeComponent
+            ? `${activeComponent.type}-${activeComponent.index}`
+            : "closed"
+        }
+        open={activeComponent !== null}
+        definition={componentSpec}
+        data={activeComponent?.data ?? {}}
+        saving={componentBusy}
+        onOpenChange={(open) => {
+          if (open) return;
+          setActiveComponent(null);
+          setComponentSpec(null);
+        }}
+        onSave={saveComponentData}
+        onDetach={() => setConfirmDetach(true)}
+      />
+      <AlertDialog open={confirmDetach} onOpenChange={setConfirmDetach}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogMedia>
+              <UnlinkIcon />
+            </AlertDialogMedia>
+            <AlertDialogTitle>Detach this Component?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Its generated HTML will replace the managed reference and become
+              freely editable. Later library changes will no longer apply to it.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={componentBusy}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={componentBusy}
+              onClick={() => void detachActiveComponent()}
+            >
+              Detach into HTML
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Card>
   );
+}
+
+function mergeComponentData(
+  defaults: ComponentData,
+  provided: ComponentData,
+): ComponentData {
+  return mergeObjects(defaults, provided) as ComponentData;
+}
+
+function mergeObjects(defaults: unknown, provided: unknown): unknown {
+  if (
+    defaults &&
+    provided &&
+    typeof defaults === "object" &&
+    typeof provided === "object" &&
+    !Array.isArray(defaults) &&
+    !Array.isArray(provided)
+  ) {
+    const result = { ...(defaults as Record<string, unknown>) };
+    for (const [key, value] of Object.entries(
+      provided as Record<string, unknown>,
+    )) {
+      result[key] = mergeObjects(result[key], value);
+    }
+    return result;
+  }
+  return provided;
 }
 
 function DiffToggle({

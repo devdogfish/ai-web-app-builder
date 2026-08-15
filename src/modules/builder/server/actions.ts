@@ -7,10 +7,8 @@ import {
   BUILDER_UPLOAD_LIMITS,
 } from "../config/builder";
 import {
-  assertValidArticleSource,
   convertSourceToHtml,
   deriveAssetPath,
-  formatArticleHtml,
   prepareBootstrapHtml,
   replaceAssetExtension,
 } from "../content";
@@ -40,6 +38,13 @@ import {
 } from "../environment/websites";
 import { publicBuilderError } from "./errors";
 import { runBuilderRefinement } from "./refinement";
+import {
+  compileBuilderPreviewSource,
+  formatBuilderSourceDraft,
+  hasActiveComponents,
+  prepareHistoricalSourceForRestore,
+  prepareManagedSourceForSave,
+} from "./component-integration";
 import {
   assertValidBootstrapDocument,
   assertValidReferenceUploads,
@@ -85,6 +90,29 @@ const imageMutationSchema = z.object({
   imageId: z.string().trim().min(1).max(256),
 });
 
+const articleSourceSchema = z
+  .string()
+  .max(BUILDER_DOCUMENT_LIMITS.maxSourceBytes);
+
+export async function formatBuilderArticleSourceAction(
+  source: string,
+): Promise<ActionResult<string>> {
+  return result(() => formatBuilderSourceDraft(articleSourceSchema.parse(source)));
+}
+
+export async function compileBuilderPreviewAction(
+  reference: EnvironmentReference,
+  source: string,
+): Promise<ActionResult<string>> {
+  return result(async () => {
+    await resolveAuthorizedEnvironment(
+      environmentSchema.parse(reference),
+      "read",
+    );
+    return compileBuilderPreviewSource(articleSourceSchema.parse(source));
+  });
+}
+
 export async function getBuilderWorkspaceAction(
   reference: EnvironmentReference,
 ): Promise<ActionResult<BuilderWorkspace>> {
@@ -99,11 +127,11 @@ export async function getBuilderWorkspaceAction(
       const existingHtml =
         await getArticleIntegration().getInitialArticleHtml(environment);
       if (existingHtml) {
-        assertValidArticleSource(existingHtml);
-        const formattedHtml = await formatArticleHtml(existingHtml);
+        const prepared = await prepareManagedSourceForSave(existingHtml);
         workspace = repository.bootstrapArticle({
           article: articleRecord(environment),
-          html: formattedHtml,
+          html: prepared.source,
+          hostHtml: prepared.compiledHtml,
         });
       }
     }
@@ -134,19 +162,38 @@ export async function runBuilderActionAction(
     }
 
     switch (input.type) {
-      case "apply-source":
-        assertValidArticleSource(input.content);
+      case "apply-source": {
+        if (!existingWorkspace) {
+          throw new BuilderActionError("Bootstrap the Builder Chat first.");
+        }
+        const applied = await prepareManagedSourceForSave(
+          input.content,
+          existingWorkspace.currentVersion.html,
+        );
         repository.applySource({
           articleId: environment.articleId,
-          html: input.content,
+          html: applied.source,
+          hostHtml: applied.compiledHtml,
         });
         break;
-      case "rewind":
+      }
+      case "rewind": {
+        if (!existingWorkspace) {
+          throw new BuilderActionError("Bootstrap the Builder Chat first.");
+        }
+        const target = existingWorkspace.versions.find(
+          (version) => version.id === input.versionId,
+        );
+        if (!target) throw new BuilderActionError("Version not found.");
+        const restored = await prepareHistoricalSourceForRestore(target.html);
         repository.rewind({
           articleId: environment.articleId,
           versionId: input.versionId,
+          html: restored.source,
+          hostHtml: restored.compiledHtml,
         });
         break;
+      }
       case "start-new-session": {
         const current = repository.getWorkspace(environment.articleId);
         if (!current)
@@ -173,9 +220,14 @@ export async function runBuilderActionAction(
                 assetPolicy: website.assetPolicy,
                 article,
               });
+        const prepared =
+          input.method === "blank"
+            ? { source: "", compiledHtml: "" }
+            : await prepareManagedSourceForSave(html);
         repository.bootstrapArticle({
           article: articleRecord(environment),
-          html,
+          html: prepared.source,
+          hostHtml: prepared.compiledHtml,
           replaceEmptySession: input.method !== "blank",
           initialMessage:
             input.method === "html-paste"
@@ -241,6 +293,7 @@ export async function bootstrapBuilderFromFileAction(
       article,
       imagePaths: kind === "docx" ? imagePaths : undefined,
     });
+    const preparedSource = await prepareManagedSourceForSave(html);
 
     const repository = getArticleRepository();
     const existingWorkspace = repository.getWorkspace(environment.articleId);
@@ -264,7 +317,7 @@ export async function bootstrapBuilderFromFileAction(
         mediaType: file.type || "application/octet-stream",
         sizeBytes: file.size,
         storageKey: sourceStorageKey,
-        extractedText: html,
+        extractedText: preparedSource.source,
       });
       for (const image of converted.images) {
         const imageStorageKey = await getUploadStore().put({
@@ -287,7 +340,8 @@ export async function bootstrapBuilderFromFileAction(
       const workspace = repository.sqlite.transaction(() => {
         const bootstrapped = repository.bootstrapArticle({
           article: articleRecord(environment),
-          html,
+          html: preparedSource.source,
+          hostHtml: preparedSource.compiledHtml,
           initialMessage: {
             content: messageContent,
             uploads: storedUploads,
@@ -332,6 +386,28 @@ export async function bootstrapBuilderFromFileAction(
           .filter((upload) => !attachedStorageKeys.has(upload.storageKey))
           .map((upload) => getUploadStore().remove(upload.storageKey)),
       );
+      if (kind === "docx" && hasActiveComponents() && process.env.AI_PROVIDER) {
+        const docxUpload = workspace.uploads.find(
+          (upload) => upload.storageKey === sourceStorageKey,
+        );
+        if (docxUpload) {
+          try {
+            await runBuilderRefinement(
+              environment,
+              {
+                prompt:
+                  "Analyze the imported Word document using its structural extract and rendered pages. Apply managed Components only for clear, high-confidence matches. Keep ambiguous structures as ordinary HTML and mention each possible Component so I can confirm it.",
+                uploadIds: [docxUpload.id],
+              },
+              undefined,
+              { allowPreviouslyAttachedUploadIds: [docxUpload.id] },
+            );
+          } catch {
+            // The imported structural source remains usable and the refinement
+            // records a visible failure message when recognition cannot run.
+          }
+        }
+      }
     } catch (error) {
       await Promise.all(
         storedUploads.map((upload) =>
@@ -370,7 +446,7 @@ export async function convertArticleImageToJpegAction(
     if (image.mediaType !== "image/png") {
       throw new BuilderActionError("Only PNG images can be converted to JPEG.");
     }
-    const prepared = await prepareProductionImage("cmweb", image, {
+    const productionPrepared = await prepareProductionImage("cmweb", image, {
       convertPngToJpeg: true,
     });
     const website = getWebsiteConfig(environment.website);
@@ -387,15 +463,24 @@ export async function convertArticleImageToJpegAction(
       );
     }
 
+    const nextSource = workspace.currentVersion.html.replaceAll(
+      pngPath,
+      jpegPath,
+    );
+    const sourcePrepared = await prepareManagedSourceForSave(
+      nextSource,
+      workspace.currentVersion.html,
+    );
     repository.sqlite.transaction(() => {
       imageRepository.replaceBinary(environment.articleId, imageId, {
         name: image.originalName,
-        mediaType: prepared.image.mediaType,
-        bytes: prepared.image.bytes,
+        mediaType: productionPrepared.image.mediaType,
+        bytes: productionPrepared.image.bytes,
       });
       repository.applySource({
         articleId: environment.articleId,
-        html: workspace.currentVersion.html.replaceAll(pngPath, jpegPath),
+        html: sourcePrepared.source,
+        hostHtml: sourcePrepared.compiledHtml,
       });
     })();
     await flushHostSync(environment);

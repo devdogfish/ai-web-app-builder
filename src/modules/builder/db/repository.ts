@@ -58,6 +58,8 @@ export type HostSyncTask = typeof hostSyncOutbox.$inferSelect;
 export interface BootstrapArticleInput {
   article: ArticleIdentity;
   html?: string;
+  /** Plain HTML snapshot for the host; `html` remains canonical Article Source. */
+  hostHtml?: string;
   summary?: string;
   replaceEmptySession?: boolean;
   initialMessage?: {
@@ -81,6 +83,8 @@ export interface AppendMessageInput {
   kind?: "chat" | "source_apply" | "rewind" | "baseline";
   status?: "complete" | "failed" | "stopped";
   errorCode?: string | null;
+  durationMs?: number | null;
+  thinkingMs?: number | null;
   uploadIds?: string[];
 }
 
@@ -100,8 +104,12 @@ export interface CommitAssistantVersionInput {
   expectedVersionId: string;
   expectedVersionSha256: string;
   html: string;
+  /** Plain HTML snapshot for the host; `html` remains canonical Article Source. */
+  hostHtml?: string;
   response: string;
   summary: string;
+  durationMs?: number | null;
+  thinkingMs?: number | null;
   uploadIds?: string[];
 }
 
@@ -111,17 +119,25 @@ export interface CommitAssistantAnswerInput {
   expectedVersionId: string;
   expectedVersionSha256: string;
   response: string;
+  durationMs?: number | null;
+  thinkingMs?: number | null;
 }
 
 export interface ApplySourceInput {
   articleId: string;
   html: string;
+  /** Plain HTML snapshot for the host; `html` remains canonical Article Source. */
+  hostHtml?: string;
 }
 
 export interface RewindInput {
   articleId: string;
   versionId: string;
   summary?: string;
+  /** Optional materialized source when restoring a historical retired Component. */
+  html?: string;
+  /** Plain HTML snapshot for the host; the restored version remains Article Source. */
+  hostHtml?: string;
 }
 
 export interface ArticleRepositoryOptions {
@@ -142,6 +158,7 @@ export class ArticleRepositoryError extends Error {
       | "upload_not_found"
       | "upload_already_attached"
       | "invalid_upload_size"
+      | "compiled_html_required"
       | "stale_version",
     message: string,
   ) {
@@ -152,6 +169,17 @@ export class ArticleRepositoryError extends Error {
 
 function digest(html: string): string {
   return createHash("sha256").update(html).digest("hex");
+}
+
+function hostSnapshot(source: string, compiledHtml: string | undefined): string {
+  if (compiledHtml !== undefined) return compiledHtml;
+  if (source.includes("<Component")) {
+    throw new ArticleRepositoryError(
+      "compiled_html_required",
+      "Managed Article Source requires a compiled host HTML snapshot.",
+    );
+  }
+  return source;
 }
 
 function configuredFilename(): string {
@@ -317,6 +345,7 @@ export class ArticleRepository {
             articleType: input.article.articleType,
             title: input.article.title ?? "",
             html,
+            hostHtmlSha256: null,
             createdAt: timestamp,
             updatedAt: timestamp,
           })
@@ -379,14 +408,15 @@ export class ArticleRepository {
             .run();
         });
       }
+      const hostHtml = hostSnapshot(html, input.hostHtml);
       tx.insert(hostSyncOutbox)
         .values({
           versionId,
           articleId: input.article.id,
           versionNumber: 1,
-          html,
-          sha256: digest(html),
-          expectedPreviousSha256: article?.html ? digest(article.html) : null,
+          html: hostHtml,
+          sha256: digest(hostHtml),
+          expectedPreviousSha256: article?.hostHtmlSha256 ?? null,
           createdAt: timestamp,
           updatedAt: timestamp,
         })
@@ -419,6 +449,8 @@ export class ArticleRepository {
           content: input.content,
           status: input.status ?? "complete",
           errorCode: input.errorCode ?? null,
+          durationMs: input.durationMs ?? null,
+          thinkingMs: input.thinkingMs ?? null,
           createdAt: timestamp,
         })
         .returning()
@@ -531,6 +563,8 @@ export class ArticleRepository {
           kind: "chat",
           content: input.response,
           status: "complete",
+          durationMs: input.durationMs ?? null,
+          thinkingMs: input.thinkingMs ?? null,
           createdAt: timestamp,
         })
         .returning()
@@ -541,6 +575,7 @@ export class ArticleRepository {
         articleId: input.articleId,
         chat,
         html: input.html,
+        hostHtml: input.hostHtml,
         summary: normalizeVersionSummary(input.summary),
         source: "assistant",
         messageId: message.id,
@@ -597,6 +632,8 @@ export class ArticleRepository {
           kind: "chat",
           content: input.response,
           status: "complete",
+          durationMs: input.durationMs ?? null,
+          thinkingMs: input.thinkingMs ?? null,
           createdAt: timestamp,
         })
         .returning()
@@ -636,7 +673,25 @@ export class ArticleRepository {
           `Current version for article ${input.articleId} does not exist`,
         );
       }
-      if (currentVersion.html === input.html) return currentVersion;
+
+      const hostHtml = hostSnapshot(input.html, input.hostHtml);
+      const hostSha256 = digest(hostHtml);
+      const existingTask = tx
+        .select()
+        .from(hostSyncOutbox)
+        .where(eq(hostSyncOutbox.versionId, currentVersion.id))
+        .get();
+      const article = tx
+        .select({ hostHtmlSha256: articles.hostHtmlSha256 })
+        .from(articles)
+        .where(eq(articles.id, input.articleId))
+        .get();
+      if (
+        currentVersion.html === input.html &&
+        (existingTask?.sha256 ?? article?.hostHtmlSha256) === hostSha256
+      ) {
+        return currentVersion;
+      }
 
       const sha256 = digest(input.html);
       const version = tx
@@ -651,17 +706,20 @@ export class ArticleRepository {
           versionId: version.id,
           articleId: input.articleId,
           versionNumber: version.number,
-          html: version.html,
-          sha256: version.sha256,
-          expectedPreviousSha256: currentVersion.sha256,
+          html: hostHtml,
+          sha256: hostSha256,
+          expectedPreviousSha256:
+            existingTask?.expectedPreviousSha256 ??
+            article?.hostHtmlSha256 ??
+            null,
           createdAt: timestamp,
           updatedAt: timestamp,
         })
         .onConflictDoUpdate({
           target: hostSyncOutbox.versionId,
           set: {
-            html: version.html,
-            sha256: version.sha256,
+            html: hostHtml,
+            sha256: hostSha256,
             attempts: 0,
             lastError: null,
             updatedAt: timestamp,
@@ -725,7 +783,8 @@ export class ArticleRepository {
       return this.insertNextVersion(tx, {
         articleId: input.articleId,
         chat,
-        html: target.html,
+        html: input.html ?? target.html,
+        hostHtml: input.hostHtml,
         summary,
         source: "rewind",
         messageId: message.id,
@@ -833,10 +892,21 @@ export class ArticleRepository {
   }
 
   completeHostSync(versionId: string): void {
-    this.db
-      .delete(hostSyncOutbox)
-      .where(eq(hostSyncOutbox.versionId, versionId))
-      .run();
+    this.db.transaction((tx) => {
+      const task = tx
+        .select()
+        .from(hostSyncOutbox)
+        .where(eq(hostSyncOutbox.versionId, versionId))
+        .get();
+      if (!task) return;
+      tx.update(articles)
+        .set({ hostHtmlSha256: task.sha256, updatedAt: this.now() })
+        .where(eq(articles.id, task.articleId))
+        .run();
+      tx.delete(hostSyncOutbox)
+        .where(eq(hostSyncOutbox.versionId, versionId))
+        .run();
+    });
   }
 
   failHostSync(versionId: string, error: string): void {
@@ -923,6 +993,7 @@ export class ArticleRepository {
       articleId: string;
       chat: BuilderChat;
       html: string;
+      hostHtml?: string;
       summary: string;
       source: "assistant" | "manual" | "rewind";
       messageId: string | null;
@@ -962,14 +1033,28 @@ export class ArticleRepository {
       .returning()
       .get();
 
+    const hostHtml = hostSnapshot(version.html, input.hostHtml);
+    const pending = tx
+      .select({ sha256: hostSyncOutbox.sha256 })
+      .from(hostSyncOutbox)
+      .where(eq(hostSyncOutbox.articleId, input.articleId))
+      .orderBy(asc(hostSyncOutbox.versionNumber))
+      .all()
+      .at(-1);
+    const article = tx
+      .select({ hostHtmlSha256: articles.hostHtmlSha256 })
+      .from(articles)
+      .where(eq(articles.id, input.articleId))
+      .get();
     tx.insert(hostSyncOutbox)
       .values({
         versionId: version.id,
         articleId: input.articleId,
         versionNumber: version.number,
-        html: version.html,
-        sha256: version.sha256,
-        expectedPreviousSha256: latest.sha256,
+        html: hostHtml,
+        sha256: digest(hostHtml),
+        expectedPreviousSha256:
+          pending?.sha256 ?? article?.hostHtmlSha256 ?? null,
         createdAt: input.timestamp,
         updatedAt: input.timestamp,
       })
