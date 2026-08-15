@@ -3,23 +3,14 @@
 import { z } from "zod";
 
 import {
-  ARTICLE_SYSTEM_INSTRUCTIONS,
-  ArticleModelError,
-  createArticleModelFromEnv,
-  type ArticleModelResult,
-} from "../ai";
-import {
   BUILDER_DOCUMENT_LIMITS,
   BUILDER_UPLOAD_LIMITS,
 } from "../config/builder";
 import {
   assertValidArticleSource,
-  compactConversationMemory,
-  compactedConversationBoundary,
   convertSourceToHtml,
   deriveAssetPath,
   formatArticleHtml,
-  planModelContext,
   prepareBootstrapHtml,
   replaceAssetExtension,
 } from "../content";
@@ -31,7 +22,6 @@ import type {
   ReferenceUploadPreview,
 } from "../core/contracts";
 import { assertWorkspaceEnvironment, toBuilderWorkspace } from "../core/server";
-import type { ArticleWorkspace } from "../db";
 import { getArticleRepository } from "../db/server";
 import { getArticleIntegration } from "../environment/article-integration";
 import { flushHostSync } from "../environment/host-sync";
@@ -45,15 +35,11 @@ import type {
   EnvironmentReference,
 } from "../environment/types";
 import {
-  hasRefinementInput,
-  resolveRefinementPrompt,
-} from "../core/refinement-request";
-import {
   getArticleAssetContext,
   getWebsiteConfig,
 } from "../environment/websites";
-import { builderErrorDetails, publicBuilderError } from "./errors";
-import { getArticleRefinementCoordinator } from "./refinement-lock";
+import { publicBuilderError } from "./errors";
+import { runBuilderRefinement } from "./refinement";
 import {
   assertValidBootstrapDocument,
   assertValidReferenceUploads,
@@ -89,19 +75,6 @@ const actionSchema = z.discriminatedUnion("type", [
     content: z.string().max(BUILDER_DOCUMENT_LIMITS.maxSourceBytes).optional(),
   }),
 ]);
-
-const refineSchema = z.object({
-  prompt: z.string().trim().max(20_000),
-  uploadIds: z.array(z.string().trim().min(1).max(256)).max(10),
-  runtimeError: z.string().max(10_000).optional(),
-}).superRefine((input, context) => {
-  if (hasRefinementInput(input.prompt, input.uploadIds)) return;
-  context.addIssue({
-    code: "custom",
-    path: ["prompt"],
-    message: "Add a message or at least one attachment.",
-  });
-});
 
 const uploadPreviewSchema = z.object({
   uploadId: z.string().trim().min(1).max(256),
@@ -555,217 +528,7 @@ export async function refineBuilderAction(
   reference: EnvironmentReference,
   request: Omit<RefineRequest, "environment">,
 ): Promise<ActionResult<BuilderWorkspace>> {
-  return result(async () => {
-    const environment = await resolveAuthorizedEnvironment(
-      environmentSchema.parse(reference),
-      "refine",
-    );
-    return getArticleRefinementCoordinator().run(
-      environment.articleId,
-      async () => {
-        const website = getWebsiteConfig(environment.website);
-        const article = getArticleAssetContext(environment);
-        const input = refineSchema.parse(request);
-        const repository = getArticleRepository();
-        const workspace = repository.getWorkspace(environment.articleId);
-        if (!workspace)
-          throw new BuilderActionError("Bootstrap the Builder Chat first.");
-        assertWorkspaceEnvironment(workspace, environment);
-
-        const selectedRecords = input.uploadIds.map((id) => {
-          const upload = workspace.uploads.find(
-            (candidate) => candidate.id === id,
-          );
-          if (
-            !upload ||
-            (upload.messageId &&
-              !isRetryableUpload(workspace, upload.messageId))
-          ) {
-            throw new BuilderActionError("A selected upload is unavailable.");
-          }
-          return upload;
-        });
-        const selectedBytes = selectedRecords.reduce(
-          (total, upload) => total + upload.sizeBytes,
-          0,
-        );
-        if (selectedBytes > BUILDER_UPLOAD_LIMITS.maxBytesPerMessage) {
-          throw new BuilderActionError(
-            "Selected references exceed the 50 MB per-message limit.",
-          );
-        }
-        const selectedImageBytes = selectedRecords
-          .filter((upload) => isModelImage(upload.name))
-          .reduce((total, upload) => total + upload.sizeBytes, 0);
-        if (
-          selectedImageBytes >
-          BUILDER_UPLOAD_LIMITS.maxImageBytesPerModelRequest
-        ) {
-          throw new BuilderActionError(
-            "Selected image references exceed the 20 MB model-request limit.",
-          );
-        }
-
-        const selectedUploads = await Promise.all(
-          selectedRecords.map(async (upload, index) => {
-            const image = isModelImage(upload.name);
-            const expectedAssetPath = image
-              ? deriveAssetPath(website.assetPolicy, article, index + 1)
-              : undefined;
-            const stored = image
-              ? await getUploadStore().get(upload.storageKey)
-              : undefined;
-            return {
-              id: upload.id,
-              name: upload.name,
-              mediaType: upload.mediaType,
-              text: buildModelUploadText(upload, expectedAssetPath),
-              dataUrl: stored
-                ? `data:${imageMediaType(upload.name)};base64,${Buffer.from(stored.bytes).toString("base64")}`
-                : undefined,
-            };
-          }),
-        );
-        const requestPrompt = resolveRefinementPrompt(
-          input.prompt,
-          input.uploadIds,
-        );
-        const effectivePrompt = input.runtimeError
-          ? `${requestPrompt}\n\nPreview runtime error to fix:\n${input.runtimeError}`
-          : requestPrompt;
-        const recentTurns = workspace.messages.flatMap((message) =>
-          message.role === "user" || message.role === "assistant"
-            ? [{ id: message.id, role: message.role, text: message.content }]
-            : [],
-        );
-        const compactedThroughMessageId = compactedConversationBoundary(
-          workspace.chat.compactMemory,
-        );
-        const compactionBoundaryIndex = compactedThroughMessageId
-          ? recentTurns.findIndex(
-              (message) => message.id === compactedThroughMessageId,
-            )
-          : -1;
-        const uncompactedRecentTurns = recentTurns.slice(
-          compactionBoundaryIndex + 1,
-        );
-        const contextPlan = planModelContext({
-          systemInstructions: ARTICLE_SYSTEM_INSTRUCTIONS,
-          compactMemory: workspace.chat.compactMemory,
-          currentRequest: effectivePrompt,
-          currentDocument: workspace.currentVersion.html,
-          recentMessages: uncompactedRecentTurns,
-          selectedUploads,
-        });
-        if (contextPlan.blocked) {
-          const detail = contextPlan.blockingUpload
-            ? ` Remove oversized upload ${contextPlan.blockingUpload.name}.`
-            : " The current Article HTML and request exceed the input budget.";
-          throw new BuilderActionError(`Context cannot fit.${detail}`);
-        }
-        const compactMemory = compactConversationMemory(
-          workspace.chat.compactMemory,
-          uncompactedRecentTurns.filter((message) =>
-            contextPlan.excludedMessageIds.includes(message.id),
-          ),
-        );
-
-        const attachmentUploadIds = selectedRecords.map((upload) =>
-          upload.messageId
-            ? repository.addUpload({
-                articleId: environment.articleId,
-                name: upload.name,
-                mediaType: upload.mediaType,
-                sizeBytes: upload.sizeBytes,
-                storageKey: upload.storageKey,
-                extractedText: upload.extractedText,
-              }).id
-            : upload.id,
-        );
-        repository.appendMessage({
-          articleId: environment.articleId,
-          role: "user",
-          content: input.prompt,
-          uploadIds: attachmentUploadIds,
-        });
-
-        try {
-          const model = createArticleModelFromEnv();
-          let modelResult: ArticleModelResult | null = null;
-          for await (const event of model.stream({
-            currentArticleHtml: workspace.currentVersion.html,
-            currentPrompt: effectivePrompt,
-            selectedUploadExtracts: selectedUploads,
-            recentRelevantTurns: contextPlan.messages.map((message) => ({
-              role: message.role,
-              content: message.text,
-            })),
-            compactMemory,
-            environmentContext: environment,
-          })) {
-            if (event.type === "finish") modelResult = event.result;
-          }
-          if (!modelResult) {
-            throw new ArticleModelError(
-              "malformed_response",
-              "The AI provider returned no Builder response.",
-            );
-          }
-
-          if (modelResult.action === "edit") {
-            const formattedArticleHtml = await formatArticleHtml(
-              modelResult.articleHtml,
-            );
-            assertValidArticleSource(formattedArticleHtml);
-            repository.commitAssistantVersion({
-              articleId: environment.articleId,
-              expectedChatId: workspace.chat.id,
-              expectedVersionId: workspace.currentVersion.id,
-              expectedVersionSha256: workspace.currentVersion.sha256,
-              html: formattedArticleHtml,
-              response: modelResult.response,
-              summary: modelResult.summary,
-            });
-          } else {
-            repository.commitAssistantAnswer({
-              articleId: environment.articleId,
-              expectedChatId: workspace.chat.id,
-              expectedVersionId: workspace.currentVersion.id,
-              expectedVersionSha256: workspace.currentVersion.sha256,
-              response: modelResult.response,
-            });
-          }
-          if (contextPlan.compacted) {
-            repository.setCompactMemory(
-              environment.articleId,
-              compactMemory ?? null,
-            );
-          }
-          if (modelResult.action === "edit") await flushHostSync(environment);
-          return builderWorkspace(environment, repository);
-        } catch (error) {
-          const publicError = builderErrorDetails(error, {
-            fallback:
-              "The Builder hit an unexpected error. Retry this request.",
-            context: "Builder refinement failed.",
-          });
-          const activeWorkspace = repository.getWorkspace(
-            environment.articleId,
-          );
-          if (activeWorkspace?.chat.id === workspace.chat.id) {
-            repository.appendMessage({
-              articleId: environment.articleId,
-              role: "assistant",
-              content: publicError.message,
-              status: "failed",
-              errorCode: publicError.code,
-            });
-          }
-          throw new BuilderActionError(publicError.message);
-        }
-      },
-    );
-  });
+  return result(() => runBuilderRefinement(reference, request));
 }
 
 async function result<T>(
@@ -847,30 +610,6 @@ async function extractReferenceText(
 
 function isModelImage(name: string): boolean {
   return MODEL_IMAGE_EXTENSIONS.has(fileExtension(name));
-}
-
-function imageMediaType(name: string): string {
-  const extension = fileExtension(name);
-  if (extension === ".jpg" || extension === ".jpeg") return "image/jpeg";
-  return `image/${extension.slice(1)}`;
-}
-
-function isRetryableUpload(
-  workspace: ArticleWorkspace,
-  messageId: string,
-): boolean {
-  const lastAssistantIndex = workspace.messages.findLastIndex(
-    (message) => message.role === "assistant",
-  );
-  if (lastAssistantIndex < 0) return false;
-  const lastAssistant = workspace.messages[lastAssistantIndex];
-  if (lastAssistant.status !== "failed" && lastAssistant.status !== "stopped") {
-    return false;
-  }
-  const precedingUser = workspace.messages
-    .slice(0, lastAssistantIndex)
-    .findLast((message) => message.role === "user");
-  return precedingUser?.id === messageId;
 }
 
 const TEXT_EXTENSIONS = new Set([

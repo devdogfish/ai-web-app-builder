@@ -41,18 +41,29 @@ import {
   ToggleGroupItem,
 } from "@/modules/builder/ui/toggle-group";
 import { formatModelPayload } from "@/modules/builder/uploads/format-model-payload";
+import { cn } from "@/modules/builder/utils";
 
 export interface AttachmentViewerTarget {
   upload: ReferenceUpload;
   index: number;
+  preview?: ReferenceUploadPreview;
+  imagePreviewUrl?: string;
+  imageDimensions?: ImageDimensions;
+}
+
+interface ImageDimensions {
+  width: number;
+  height: number;
 }
 
 export function AttachmentViewer({
+  open,
   environment,
   target,
   articleImages,
   onOpenChange,
 }: {
+  open: boolean;
   environment: BuilderEnvironment;
   target: AttachmentViewerTarget | null;
   articleImages: readonly BuilderArticleImage[];
@@ -68,6 +79,7 @@ export function AttachmentViewer({
 
   useEffect(() => {
     if (!target) return;
+    if (target.preview) return;
     let cancelled = false;
 
     void getUploadPreview(environment, target.upload.id, target.index)
@@ -89,110 +101,127 @@ export function AttachmentViewer({
     };
   }, [environment, target]);
 
-  const hasOriginalView = preview?.kind === "docx";
+  const activePreview =
+    target?.preview ?? (preview?.id === target?.upload.id ? preview : null);
+  const hasOriginalView = activePreview?.kind === "docx";
+  const isImageTarget = target?.upload.mimeType.startsWith("image/") ?? false;
   const imageSources = resolveAttachmentImageSources(
     target?.upload.name,
     articleImages,
   );
 
   function handleOpenChange(open: boolean) {
-    if (!open) {
-      setPreview(null);
-      setError(null);
-      setTab("original");
-      setPayloadView("formatted");
-      setCopied(false);
-    }
     onOpenChange(open);
   }
 
   async function copyPayload() {
-    if (!preview) return;
-    await navigator.clipboard.writeText(preview.modelPayload);
+    if (!activePreview) return;
+    await navigator.clipboard.writeText(activePreview.modelPayload);
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1500);
   }
 
   return (
-    <Dialog open={target !== null} onOpenChange={handleOpenChange}>
-      <DialogContent className="grid h-[min(92svh,900px)] w-[min(96vw,1120px)] max-w-none grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0 sm:max-w-none">
-        <DialogHeader className="border-b bg-white px-5 py-4 pr-14">
-          <div className="flex items-start gap-3">
-            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border bg-muted/60">
-              {preview?.kind === "image" ? (
-                <ImageIcon className="size-4" />
-              ) : (
-                <FileTextIcon className="size-4" />
-              )}
-            </div>
-            <div className="min-w-0">
-              <DialogTitle className="truncate leading-5">
-                {target?.upload.name ?? "Attachment"}
-              </DialogTitle>
-              <DialogDescription className="mt-0.5">
-                {target ? formatBytes(target.upload.size) : ""}
-                {preview && preview.kind !== "image"
-                  ? ` · ${preview.mimeType}`
-                  : ""}
-              </DialogDescription>
-            </div>
-          </div>
-        </DialogHeader>
-
-        {error ? (
-          <div className="flex items-center justify-center p-8 text-sm text-destructive">
-            {error}
-          </div>
-        ) : !preview ? (
-          <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
-            <Spinner />
-            Loading attachment…
-          </div>
-        ) : preview.kind === "image" ? (
-          <ImageDocumentView preview={preview} sources={imageSources} />
-        ) : hasOriginalView ? (
-          <Tabs value={tab} onValueChange={setTab} className="min-h-0 gap-0">
-            <div className="flex h-11 shrink-0 items-center border-b bg-muted/30 px-4">
-              <TabsList aria-label="Attachment view">
-                <TabsTrigger value="original">
-                  {preview.kind === "docx" ? "Word view" : "Image"}
-                </TabsTrigger>
-                <TabsTrigger value="payload">LLM payload</TabsTrigger>
-              </TabsList>
-              {tab === "payload" ? (
-                <PayloadActions
-                  view={payloadView}
-                  copied={copied}
-                  onViewChange={setPayloadView}
-                  onCopy={() => void copyPayload()}
-                />
-              ) : null}
-            </div>
-            <TabsContent value="original" className="min-h-0 overflow-hidden">
-              <WordDocumentView preview={preview} />
-            </TabsContent>
-            <TabsContent value="payload" className="min-h-0 overflow-hidden">
-              <ModelPayloadView
-                payload={preview.modelPayload}
-                view={payloadView}
-              />
-            </TabsContent>
-          </Tabs>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent
+        className={cn(
+          "grid max-w-none gap-0 overflow-hidden p-0 sm:max-w-none",
+          isImageTarget
+            ? "h-auto max-h-[92svh] w-fit max-w-[96vw] grid-rows-[auto]"
+            : "h-[min(92svh,900px)] w-[min(96vw,1120px)] grid-rows-[auto_minmax(0,1fr)]",
+        )}
+      >
+        {isImageTarget && target ? (
+          <ImageDocumentView
+            key={target.upload.id}
+            upload={target.upload}
+            preview={activePreview}
+            sources={imageSources}
+            preloadedUrl={target.imagePreviewUrl}
+            initialDimensions={target.imageDimensions}
+            loadError={error}
+          />
         ) : (
-          <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
-            <div className="flex h-11 items-center border-b bg-muted/30 px-4">
-              <PayloadActions
-                view={payloadView}
-                copied={copied}
-                onViewChange={setPayloadView}
-                onCopy={() => void copyPayload()}
-              />
-            </div>
-            <ModelPayloadView
-              payload={preview.modelPayload}
-              view={payloadView}
-            />
-          </div>
+          <>
+            <DialogHeader className="border-b bg-white px-5 py-4 pr-14">
+              <div className="flex items-start gap-3">
+                <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border bg-muted/60">
+                  <FileTextIcon className="size-4" />
+                </div>
+                <div className="min-w-0">
+                  <DialogTitle className="truncate leading-5">
+                    {target?.upload.name ?? "Attachment"}
+                  </DialogTitle>
+                  <DialogDescription className="mt-0.5">
+                    {target ? formatBytes(target.upload.size) : ""}
+                    {activePreview ? ` · ${activePreview.mimeType}` : ""}
+                  </DialogDescription>
+                </div>
+              </div>
+            </DialogHeader>
+
+            {error ? (
+              <div className="flex items-center justify-center p-8 text-sm text-destructive">
+                {error}
+              </div>
+            ) : !activePreview ? (
+              <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
+                <Spinner />
+                Loading attachment…
+              </div>
+            ) : hasOriginalView ? (
+              <Tabs
+                value={tab}
+                onValueChange={setTab}
+                className="min-h-0 gap-0"
+              >
+                <div className="flex h-11 shrink-0 items-center border-b bg-muted/30 px-4">
+                  <TabsList aria-label="Attachment view">
+                    <TabsTrigger value="original">Word view</TabsTrigger>
+                    <TabsTrigger value="payload">LLM payload</TabsTrigger>
+                  </TabsList>
+                  {tab === "payload" ? (
+                    <PayloadActions
+                      view={payloadView}
+                      copied={copied}
+                      onViewChange={setPayloadView}
+                      onCopy={() => void copyPayload()}
+                    />
+                  ) : null}
+                </div>
+                <TabsContent
+                  value="original"
+                  className="min-h-0 overflow-hidden"
+                >
+                  <WordDocumentView preview={activePreview} />
+                </TabsContent>
+                <TabsContent
+                  value="payload"
+                  className="min-h-0 overflow-hidden"
+                >
+                  <ModelPayloadView
+                    payload={activePreview.modelPayload}
+                    view={payloadView}
+                  />
+                </TabsContent>
+              </Tabs>
+            ) : (
+              <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
+                <div className="flex h-11 items-center border-b bg-muted/30 px-4">
+                  <PayloadActions
+                    view={payloadView}
+                    copied={copied}
+                    onViewChange={setPayloadView}
+                    onCopy={() => void copyPayload()}
+                  />
+                </div>
+                <ModelPayloadView
+                  payload={activePreview.modelPayload}
+                  view={payloadView}
+                />
+              </div>
+            )}
+          </>
         )}
       </DialogContent>
     </Dialog>
@@ -272,22 +301,29 @@ function WordDocumentView({ preview }: { preview: ReferenceUploadPreview }) {
 }
 
 function ImageDocumentView({
+  upload,
   preview,
   sources,
+  preloadedUrl,
+  initialDimensions,
+  loadError,
 }: {
-  preview: ReferenceUploadPreview;
+  upload: ReferenceUpload;
+  preview: ReferenceUploadPreview | null;
   sources: AttachmentImageSources | null;
+  preloadedUrl?: string;
+  initialDimensions?: ImageDimensions;
+  loadError: string | null;
 }) {
   const [objectUrl, setObjectUrl] = useState<string | null>(null);
   const [sourceIndex, setSourceIndex] = useState(0);
-  const [dimensions, setDimensions] = useState<{
-    width: number;
-    height: number;
-  } | null>(null);
+  const [dimensions, setDimensions] = useState<ImageDimensions | null>(
+    initialDimensions ?? null,
+  );
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    if (!preview.rawBytes) return;
+    if (!preview?.rawBytes || preloadedUrl) return;
     let cancelled = false;
     const bytes = Uint8Array.from(preview.rawBytes);
     const nextUrl = URL.createObjectURL(
@@ -304,88 +340,137 @@ function ImageDocumentView({
       cancelled = true;
       URL.revokeObjectURL(nextUrl);
     };
-  }, [preview]);
+  }, [preloadedUrl, preview]);
 
   const candidates = uniqueStrings([
     sources?.remoteUrl,
     sources?.localUrl,
+    preloadedUrl,
     objectUrl,
   ]);
   const source = candidates[Math.min(sourceIndex, candidates.length - 1)];
+  const displayWidth = dimensions
+    ? imageDisplayWidth(dimensions.width, dimensions.height)
+    : undefined;
 
   return (
-    <div className="grid min-h-0 grid-rows-[minmax(0,1fr)_auto] bg-muted/30">
-      <div className="min-h-0 overflow-auto p-5">
-        <div className="flex min-h-full items-center justify-center">
+    <div className="grid min-h-0 grid-rows-[auto_auto] overflow-hidden bg-muted/30">
+      <DialogHeader className="border-b bg-white px-5 py-4 pr-14">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border bg-muted/60">
+            <ImageIcon className="size-4" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <DialogTitle className="truncate leading-5">
+              {upload.name}
+            </DialogTitle>
+            <DialogDescription className="sr-only">
+              Image preview
+            </DialogDescription>
+          </div>
+          <p className="hidden shrink-0 text-xs text-muted-foreground tabular-nums sm:block">
+            {dimensions
+              ? `${dimensions.width} × ${dimensions.height} px · `
+              : ""}
+            {formatBytes(upload.size)}
+          </p>
           {source && !failed ? (
-            <a
-              href={source}
-              target="_blank"
-              rel="noreferrer"
-              aria-label={`Open ${preview.name} in a new tab`}
-              className="rounded-lg outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-            >
-              {/* Native img supports arbitrary CMS, authenticated local, and blob URLs. */}
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={source}
-                alt={preview.name}
-                className="max-h-[calc(92svh-11rem)] max-w-full rounded-lg bg-white object-contain shadow-sm ring-1 ring-foreground/10"
-                onLoad={(event) => {
-                  setFailed(false);
-                  setDimensions({
-                    width: event.currentTarget.naturalWidth,
-                    height: event.currentTarget.naturalHeight,
-                  });
-                }}
-                onError={() => {
-                  setDimensions(null);
-                  if (sourceIndex < candidates.length - 1) {
-                    setSourceIndex((current) => current + 1);
-                  } else {
-                    setFailed(true);
-                  }
-                }}
-              />
-            </a>
-          ) : failed ? (
-            <p className="text-sm text-destructive">
-              The image could not be loaded.
-            </p>
-          ) : (
-            <Spinner />
-          )}
+            <Button
+              variant="outline"
+              size="sm"
+              nativeButton={false}
+              render={
+                <a href={source} target="_blank" rel="noreferrer">
+                  Open image
+                  <ExternalLinkIcon data-icon="inline-end" />
+                </a>
+              }
+            />
+          ) : null}
         </div>
-      </div>
-      <div className="flex min-h-12 items-center justify-between gap-4 border-t bg-white px-5 py-2.5">
-        <p className="text-xs text-muted-foreground tabular-nums">
-          {dimensions
-            ? `${dimensions.width} × ${dimensions.height} px · `
-            : ""}
-          {formatBytes(preview.size)}
-        </p>
+      </DialogHeader>
+      <div
+        className={cn(
+          "flex items-center justify-center overflow-hidden",
+          !source || failed ? "min-h-32 min-w-48 p-5" : "",
+        )}
+      >
         {source && !failed ? (
-          <Button
-            variant="outline"
-            size="sm"
-            nativeButton={false}
-            render={
-              <a href={source} target="_blank" rel="noreferrer">
-                Open image
-                <ExternalLinkIcon data-icon="inline-end" />
-              </a>
-            }
-          />
-        ) : null}
+          <a
+            href={source}
+            target="_blank"
+            rel="noreferrer"
+            aria-label={`Open ${upload.name} in a new tab`}
+            className="block max-w-full outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/50"
+            style={displayWidth ? { width: displayWidth } : undefined}
+          >
+            {/* Native img supports arbitrary CMS, authenticated local, and blob URLs. */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={source}
+              alt={upload.name}
+              className={cn(
+                "block h-auto object-contain",
+                displayWidth
+                  ? "w-full max-w-none"
+                  : "max-h-[calc(92svh-5rem)] w-auto max-w-[min(96vw,1120px)]",
+              )}
+              style={
+                dimensions
+                  ? {
+                      aspectRatio: `${dimensions.width} / ${dimensions.height}`,
+                    }
+                  : undefined
+              }
+              onLoad={(event) => {
+                setFailed(false);
+                setDimensions({
+                  width: event.currentTarget.naturalWidth,
+                  height: event.currentTarget.naturalHeight,
+                });
+              }}
+              onError={() => {
+                setDimensions(null);
+                if (sourceIndex < candidates.length - 1) {
+                  setSourceIndex((current) => current + 1);
+                } else {
+                  setFailed(true);
+                }
+              }}
+            />
+          </a>
+        ) : failed ? (
+          <p className="text-sm text-destructive">
+            The image could not be loaded.
+          </p>
+        ) : loadError ? (
+          <p className="text-sm text-destructive">{loadError}</p>
+        ) : (
+          <Spinner />
+        )}
       </div>
     </div>
   );
 }
 
+function imageDisplayWidth(width: number, height: number): string {
+  const aspectRatio = width / height;
+  const heightBoundSvh = formatCssNumber(92 * aspectRatio);
+  const reservedHeightRem = formatCssNumber(5 * aspectRatio);
+
+  return `min(${width}px, 96vw, 1120px, calc(${heightBoundSvh}svh - ${reservedHeightRem}rem))`;
+}
+
+function formatCssNumber(value: number): string {
+  return value.toFixed(4).replace(/\.?0+$/, "");
+}
+
 function uniqueStrings(
   values: readonly (string | null | undefined)[],
 ): string[] {
-  return [...new Set(values.filter((value): value is string => Boolean(value)))];
+  return [
+    ...new Set(values.filter((value): value is string => Boolean(value))),
+  ];
 }
 
 function PayloadActions({

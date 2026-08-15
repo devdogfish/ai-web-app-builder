@@ -17,6 +17,7 @@ const PUBLIC_DOMAIN_ERROR_NAMES = new Set([
   "ArticleRepositoryError",
   "ArticleImageRepositoryError",
   "ArticleSourceValidationError",
+  "BuilderRefinementError",
   "ProductionImageError",
   "RefinementInProgressError",
   "UploadValidationError",

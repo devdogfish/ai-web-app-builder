@@ -5,10 +5,12 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIcon,
   FilePenLineIcon,
+  FileTextIcon,
   PaperclipIcon,
   PlusIcon,
   RotateCcwIcon,
   SendIcon,
+  SquareIcon,
   Undo2Icon,
   XIcon,
 } from "lucide-react";
@@ -59,6 +61,7 @@ import {
   PROMPT_PRESETS,
   type BuilderWorkspace,
   type ReferenceUpload,
+  type ReferenceUploadPreview,
 } from "@/modules/builder/core/contracts";
 import { getUploadPreview } from "@/modules/builder/core/client";
 import { hasRefinementInput } from "@/modules/builder/core/refinement-request";
@@ -82,6 +85,7 @@ export function ConversationPanel({
   onSelectedUploadIdsChange,
   onUpload,
   onSend,
+  onStop,
   onViewVersionDiff,
   onRestoreVersion,
   onStartNewSession,
@@ -98,6 +102,7 @@ export function ConversationPanel({
   onSelectedUploadIdsChange: (ids: string[]) => void;
   onUpload: (files: File[]) => Promise<void> | void;
   onSend: () => void;
+  onStop: () => void;
   onViewVersionDiff: (id: string) => void;
   onRestoreVersion: (id: string) => void;
   onStartNewSession: () => void;
@@ -109,6 +114,12 @@ export function ConversationPanel({
   const [isPromptMultiline, setIsPromptMultiline] = useState(false);
   const [attachmentTarget, setAttachmentTarget] =
     useState<AttachmentViewerTarget | null>(null);
+  const [attachmentViewerOpen, setAttachmentViewerOpen] = useState(false);
+
+  function openAttachment(target: AttachmentViewerTarget) {
+    setAttachmentTarget(target);
+    setAttachmentViewerOpen(true);
+  }
   const selectedUploads = selectedUploadIds.flatMap((id) => {
     const upload = workspace.uploads.find((item) => item.id === id);
     return upload ? [upload] : [];
@@ -244,14 +255,12 @@ export function ConversationPanel({
                         uploadIds={message.uploadIds}
                         environment={environment}
                         workspace={workspace}
-                        onOpen={setAttachmentTarget}
+                        onOpen={openAttachment}
                       />
                     ) : null}
                     {message.content ? (
                       <div className="w-fit max-w-full rounded-2xl bg-muted px-3 py-2.5 text-sm leading-[1.55]">
-                        <p className="whitespace-pre-wrap">
-                          {message.content}
-                        </p>
+                        <p className="whitespace-pre-wrap">{message.content}</p>
                       </div>
                     ) : null}
                   </article>
@@ -273,7 +282,7 @@ export function ConversationPanel({
                       uploadIds={message.uploadIds}
                       environment={environment}
                       workspace={workspace}
-                      onOpen={setAttachmentTarget}
+                      onOpen={openAttachment}
                     />
                   ) : null}
                   {version ? (
@@ -351,9 +360,7 @@ export function ConversationPanel({
                   </AttachmentActions>
                   <AttachmentTrigger
                     aria-label={`View ${upload.name}`}
-                    onClick={() =>
-                      setAttachmentTarget({ upload, index: index + 1 })
-                    }
+                    onClick={() => openAttachment({ upload, index: index + 1 })}
                   />
                 </Attachment>
               ))}
@@ -431,7 +438,6 @@ export function ConversationPanel({
                   rows={1}
                   value={prompt}
                   placeholder="Ask about or refine the article…"
-                  disabled={generating}
                   className={cn(
                     "max-h-32 min-h-10 px-2 py-2.5 leading-5",
                     isPromptMultiline &&
@@ -516,11 +522,11 @@ export function ConversationPanel({
                     <InputGroupButton
                       type="button"
                       size="icon-sm"
-                      className="size-8"
-                      aria-label="Generation in progress"
-                      disabled
+                      className="size-8 bg-foreground text-background hover:bg-foreground/85 hover:text-background"
+                      aria-label="Stop generation"
+                      onClick={onStop}
                     >
-                      <Spinner />
+                      <SquareIcon className="size-3.5 fill-current" />
                     </InputGroupButton>
                   ) : (
                     <InputGroupButton
@@ -561,12 +567,12 @@ export function ConversationPanel({
         </div>
       </CardFooter>
       <AttachmentViewer
+        key={attachmentTarget?.upload.id ?? "attachment-viewer"}
+        open={attachmentViewerOpen}
         environment={environment}
         target={attachmentTarget}
         articleImages={workspace.articleImages}
-        onOpenChange={(open) => {
-          if (!open) setAttachmentTarget(null);
-        }}
+        onOpenChange={setAttachmentViewerOpen}
       />
     </Card>
   );
@@ -594,7 +600,7 @@ function MessageAttachments({
               upload={upload}
               environment={environment}
               index={index + 1}
-              onOpen={() => onOpen({ upload, index: index + 1 })}
+              onOpen={onOpen}
             />
           ) : null;
         })}
@@ -612,50 +618,14 @@ function MessageAttachmentCard({
   upload: ReferenceUpload;
   environment: BuilderEnvironment;
   index: number;
-  onOpen: () => void;
+  onOpen: (target: AttachmentViewerTarget) => void;
 }) {
-  const extension = fileExtension(upload.name);
-
-  return (
-    <div className="group relative flex aspect-square w-32 shrink-0 flex-col overflow-hidden rounded-2xl border bg-background p-2.5 shadow-xs transition-[border-color,box-shadow] hover:border-foreground/20 hover:shadow-sm sm:w-36">
-      <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-xl bg-muted/40 p-2.5">
-        <MessageAttachmentPreview
-          upload={upload}
-          environment={environment}
-          index={index}
-        />
-      </div>
-      <div className="mt-2 min-w-0 px-0.5">
-        <p
-          className="truncate text-xs font-medium leading-4"
-          title={upload.name}
-        >
-          {upload.name}
-        </p>
-        <p className="truncate text-[10px] leading-4 font-medium tracking-wide text-muted-foreground uppercase">
-          {extension || "File"} · {formatBytes(upload.size)}
-        </p>
-      </div>
-      <button
-        type="button"
-        aria-label={`View ${upload.name}`}
-        className="absolute inset-0 rounded-[inherit] outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2"
-        onClick={onOpen}
-      />
-    </div>
-  );
-}
-
-function MessageAttachmentPreview({
-  upload,
-  environment,
-  index,
-}: {
-  upload: ReferenceUpload;
-  environment: BuilderEnvironment;
-  index: number;
-}) {
+  const [preview, setPreview] = useState<ReferenceUploadPreview | null>(null);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [imageDimensions, setImageDimensions] = useState<{
+    width: number;
+    height: number;
+  } | null>(null);
   const isImage = upload.mimeType.startsWith("image/");
 
   useEffect(() => {
@@ -665,16 +635,17 @@ function MessageAttachmentPreview({
     let objectUrl: string | null = null;
 
     void getUploadPreview(environment, upload.id, index)
-      .then((preview) => {
-        if (cancelled || preview.kind !== "image" || !preview.rawBytes) return;
-        const bytes = Uint8Array.from(preview.rawBytes);
+      .then((result) => {
+        if (cancelled || result.kind !== "image" || !result.rawBytes) return;
+        setPreview(result);
+        const bytes = Uint8Array.from(result.rawBytes);
         objectUrl = URL.createObjectURL(
-          new Blob([bytes.buffer], { type: preview.mimeType }),
+          new Blob([bytes.buffer], { type: result.mimeType }),
         );
         setImageUrl(objectUrl);
       })
       .catch(() => {
-        // The attachment remains usable through the viewer if its thumbnail fails.
+        // The attachment remains usable through the viewer if preloading fails.
       });
 
     return () => {
@@ -683,21 +654,79 @@ function MessageAttachmentPreview({
     };
   }, [environment, index, isImage, upload.id]);
 
+  return (
+    <div
+      className="group relative aspect-square w-24 shrink-0 overflow-hidden rounded-xl border bg-muted/35 shadow-xs transition-colors hover:border-foreground/20 hover:bg-muted/50 sm:w-28"
+      title={upload.name}
+    >
+      <MessageAttachmentPreview
+        upload={upload}
+        imageUrl={imageUrl}
+        onImageLoad={(dimensions) => setImageDimensions(dimensions)}
+      />
+      <button
+        type="button"
+        aria-label={`View ${upload.name}`}
+        className="absolute inset-0 rounded-[inherit] outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2"
+        onClick={() =>
+          onOpen({
+            upload,
+            index,
+            preview: preview ?? undefined,
+            imagePreviewUrl: imageUrl ?? undefined,
+            imageDimensions: imageDimensions ?? undefined,
+          })
+        }
+      />
+    </div>
+  );
+}
+
+function MessageAttachmentPreview({
+  upload,
+  imageUrl,
+  onImageLoad,
+}: {
+  upload: ReferenceUpload;
+  imageUrl: string | null;
+  onImageLoad: (dimensions: { width: number; height: number }) => void;
+}) {
   if (imageUrl) {
     return (
       // The source is a local object URL made from the user's stored upload.
       // eslint-disable-next-line @next/next/no-img-element
-      <img src={imageUrl} alt="" className="size-full object-contain" />
+      <img
+        src={imageUrl}
+        alt=""
+        className="size-full object-cover"
+        onLoad={(event) =>
+          onImageLoad({
+            width: event.currentTarget.naturalWidth,
+            height: event.currentTarget.naturalHeight,
+          })
+        }
+      />
+    );
+  }
+
+  if (fileExtension(upload.name) === "DOCX") {
+    return (
+      <div className="flex size-full flex-col items-center justify-center gap-2 bg-background p-3 text-foreground">
+        <FileTextIcon className="size-8 stroke-[1.4]" />
+        <span className="rounded border bg-muted/50 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-muted-foreground">
+          DOCX
+        </span>
+      </div>
     );
   }
 
   return (
     <Image
       src={fileTypeIconPath(upload)}
-      width={56}
-      height={56}
+      width={112}
+      height={112}
       alt=""
-      className="size-12 sm:size-14"
+      className="size-full object-contain"
     />
   );
 }

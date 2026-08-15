@@ -25,27 +25,27 @@ The classification of source-document content as an Article Block. High-confiden
 _Avoid_: Component detection, layout guessing
 
 **Managed Block**:
-An Article Block whose declared content properties are rendered through a locked, versioned recipe. Its generated markup and behavior cannot be edited directly.
+An Article Block whose declared data is rendered through a locked Component. Its generated markup and behavior cannot be edited directly.
 _Avoid_: Locked component, live component
 
-**Block Recipe**:
-A reusable definition that renders one self-contained HTML snippet from validated properties. The snippet contains its exact shell and any required inline styling or behavior.
-_Avoid_: Component, template
+**Component**:
+A reusable, self-contained HTML snippet with defined variable inputs. It contains its exact shell and any required inline styling or behavior.
+_Avoid_: Recipe, template
 
-**Property Schema**:
-The typed definition and editing hints for a Block Recipe's variable content. It validates Managed Block data and generates the default visual instance editor.
+**Component Data Schema**:
+The typed definition and editing hints for a Component's variable data. It validates Managed Block data and generates the default visual instance editor.
 _Avoid_: Props form, component inputs
 
-**Recipe Key**:
-The stable, versioned name selecting a Block Recipe, such as `tabs@2`. A Managed Block remains pinned to its selected Recipe Key until explicitly upgraded.
-_Avoid_: Component ID, component name
+**Component Type**:
+The unique name selecting a Component, such as `tabs`. All managed references use the Component's current definition.
+_Avoid_: Recipe Key, Component version
 
-**Component Directive**:
-A self-closing Article Source element containing exactly a Recipe Key and the JSON properties for one Managed Block.
-_Avoid_: JSX component, custom tag
+**Component Reference**:
+A self-closing Article Source element containing exactly a Component Type and a restricted data object for one Managed Block. Rich HTML values use unescaped `html` template literals rather than JSON strings.
+_Avoid_: Component Directive, JSX component
 
 **Detached Block**:
-An Article Block converted to freely editable Article HTML after explicit editorial confirmation. It no longer receives recipe guarantees or upgrades.
+A former Managed Block whose generated snippet has been inserted as ordinary, freely editable Article Source HTML, either explicitly or when its Component is deleted. Article chat may inspect and modify it, but it no longer receives Component changes.
 _Avoid_: Ejected component, custom component
 
 **Article Image**:

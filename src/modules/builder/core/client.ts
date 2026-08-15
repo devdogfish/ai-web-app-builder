@@ -3,7 +3,6 @@ import {
   convertArticleImageToJpegAction,
   getBuilderUploadPreviewAction,
   getBuilderWorkspaceAction,
-  refineBuilderAction,
   runBuilderActionAction,
   uploadBuilderReferencesAction,
   type ActionResult,
@@ -93,6 +92,14 @@ export async function getUploadPreview(
 export async function refineBuilder(
   environment: BuilderEnvironment,
   input: Omit<RefineRequest, "environment">,
+  options: Readonly<{ signal?: AbortSignal }> = {},
 ): Promise<BuilderWorkspace> {
-  return unwrap(await refineBuilderAction(reference(environment), input));
+  const response = await fetch("/api/builder/refine", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ environment: reference(environment), input }),
+    signal: options.signal,
+  });
+  const result = (await response.json()) as ActionResult<BuilderWorkspace>;
+  return unwrap(result);
 }

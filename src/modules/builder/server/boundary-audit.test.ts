@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -14,14 +14,17 @@ const LEGACY_FEATURE_ROOTS = [
 const NEXT_SHELLS = ["src/app/page.tsx", "src/app/layout.tsx"] as const;
 const ARTICLE_IMAGE_ROUTE =
   "src/app/api/articles/[articleId]/images/[imageId]/route.ts";
+const BUILDER_REFINEMENT_ROUTE = "src/app/api/builder/refine/route.ts";
 
 describe("Builder module boundary", () => {
   it("removes the old layer-first feature roots", () => {
     expect(findExistingPaths(LEGACY_FEATURE_ROOTS)).toEqual([]);
   });
 
-  it("removes the Builder API route surface", () => {
-    expect(findExistingPaths(["src/app/api/builder"])).toEqual([]);
+  it("limits the Builder API route surface to cancellable refinement", () => {
+    expect(findRouteFiles("src/app/api/builder")).toEqual([
+      BUILDER_REFINEMENT_ROUTE,
+    ]);
   });
 
   it("keeps Next route shells on the Builder public interface", () => {
@@ -38,6 +41,15 @@ describe("Builder module boundary", () => {
 
   it("keeps the Article Image route as a framework-only shell", () => {
     const route = readWorkspaceFile(ARTICLE_IMAGE_ROUTE);
+
+    expect(extractImportSpecifiers(route)).toEqual([
+      "@/modules/builder/server",
+    ]);
+    expect(nonEmptyLineCount(route)).toBeLessThanOrEqual(2);
+  });
+
+  it("keeps the Builder refinement route as a framework-only shell", () => {
+    const route = readWorkspaceFile(BUILDER_REFINEMENT_ROUTE);
 
     expect(extractImportSpecifiers(route)).toEqual([
       "@/modules/builder/server",
@@ -80,12 +92,50 @@ describe("Builder module boundary", () => {
       /<Button[\s\S]*?nativeButton=\{false\}[\s\S]*?render=\{[\s\S]*?<a[^>]*href=\{source\}/,
     );
   });
+
+  it("preserves attachment image aspect ratios within the viewport", () => {
+    const viewer = readWorkspaceFile(
+      "src/modules/builder/components/attachment-viewer.tsx",
+    );
+
+    expect(viewer).toContain(
+      "style={displayWidth ? { width: displayWidth } : undefined}",
+    );
+    expect(viewer).toContain(
+      "aspectRatio: `${dimensions.width} / ${dimensions.height}`",
+    );
+    expect(viewer).toContain('? "w-full max-w-none"');
+  });
+
+  it("preloads image geometry and keeps attachment interactions still", () => {
+    const conversation = readWorkspaceFile(
+      "src/modules/builder/components/conversation-panel.tsx",
+    );
+    const viewer = readWorkspaceFile(
+      "src/modules/builder/components/attachment-viewer.tsx",
+    );
+
+    expect(conversation).toContain("imageDimensions:");
+    expect(conversation).toContain("imagePreviewUrl:");
+    expect(conversation).not.toContain("hover:-translate-y");
+    expect(viewer).not.toContain("motion=");
+    expect(viewer).toContain("initialDimensions={target.imageDimensions}");
+  });
 });
 
 function findExistingPaths(relativePaths: readonly string[]) {
   return relativePaths.filter((relativePath) =>
     existsSync(path.join(WORKSPACE_ROOT, relativePath)),
   );
+}
+
+function findRouteFiles(relativeRoot: string): string[] {
+  const absoluteRoot = path.join(WORKSPACE_ROOT, relativeRoot);
+  if (!existsSync(absoluteRoot)) return [];
+  return readdirSync(absoluteRoot, { recursive: true, encoding: "utf8" })
+    .filter((relativePath) => relativePath.endsWith("route.ts"))
+    .map((relativePath) => path.join(relativeRoot, relativePath))
+    .sort();
 }
 
 function readWorkspaceFile(relativePath: string) {

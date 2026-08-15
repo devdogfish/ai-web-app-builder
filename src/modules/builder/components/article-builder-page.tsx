@@ -201,6 +201,7 @@ export function ArticleBuilderPage() {
             onSelectedUploadIdsChange={controller.setSelectedUploadIds}
             onUpload={controller.addUploads}
             onSend={() => controller.send()}
+            onStop={controller.stop}
             onViewVersionDiff={viewVersionDiff}
             onRestoreVersion={restoreVersion}
             onStartNewSession={controller.startNewSession}

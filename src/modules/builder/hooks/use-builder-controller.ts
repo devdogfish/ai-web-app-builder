@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import {
@@ -37,6 +37,7 @@ export function useBuilderController() {
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [streamStatus, setStreamStatus] = useState<string | null>(null);
+  const generationAbortRef = useRef<AbortController | null>(null);
   const environmentKey = [
     environment.articleId,
     environment.articleTitle,
@@ -69,6 +70,13 @@ export function useBuilderController() {
       active = false;
     };
   }, [adopt, environment, environmentKey]);
+
+  useEffect(
+    () => () => {
+      generationAbortRef.current?.abort();
+    },
+    [environmentKey],
+  );
 
   const visibleWorkspace =
     loadedEnvironmentKey === environmentKey ? workspace : null;
@@ -187,9 +195,15 @@ export function useBuilderController() {
     options: { includeRuntimeError?: boolean } = {},
   ) => {
     const requestPrompt = (overridePrompt ?? prompt).trim();
-    if (!hasRefinementInput(requestPrompt, selectedUploadIds) || generating) {
+    if (
+      !hasRefinementInput(requestPrompt, selectedUploadIds) ||
+      generationAbortRef.current
+    ) {
       return;
     }
+    const abortController = new AbortController();
+    const messageCountBeforeRequest = workspace?.messages.length ?? 0;
+    generationAbortRef.current = abortController;
     setGenerating(true);
     setStreamStatus("Thinking…");
     setPrompt("");
@@ -211,16 +225,33 @@ export function useBuilderController() {
     );
     try {
       adopt(
-        await refineBuilder(environment, {
-          prompt: requestPrompt,
-          uploadIds: selectedUploadIds,
-          runtimeError: options.includeRuntimeError
-            ? (runtimeError ?? undefined)
-            : undefined,
-        }),
+        await refineBuilder(
+          environment,
+          {
+            prompt: requestPrompt,
+            uploadIds: selectedUploadIds,
+            runtimeError: options.includeRuntimeError
+              ? (runtimeError ?? undefined)
+              : undefined,
+          },
+          { signal: abortController.signal },
+        ),
       );
       setRuntimeError(null);
     } catch (error) {
+      if (abortController.signal.aborted) {
+        try {
+          adopt(
+            await recoverStoppedWorkspace(
+              environment,
+              messageCountBeforeRequest,
+            ),
+          );
+        } catch {
+          // Keep the optimistic user message if cancellation recovery fails.
+        }
+        return;
+      }
       try {
         const recovered = await fetchWorkspace(environment);
         adopt(recovered);
@@ -233,10 +264,20 @@ export function useBuilderController() {
       }
       toast.error((error as Error).message);
     } finally {
-      setGenerating(false);
-      setStreamStatus(null);
+      if (generationAbortRef.current === abortController) {
+        generationAbortRef.current = null;
+        setGenerating(false);
+        setStreamStatus(null);
+      }
     }
   };
+
+  const stop = useCallback(() => {
+    const activeGeneration = generationAbortRef.current;
+    if (!activeGeneration || activeGeneration.signal.aborted) return;
+    setStreamStatus("Stopping…");
+    activeGeneration.abort();
+  }, []);
 
   return {
     environment,
@@ -267,5 +308,27 @@ export function useBuilderController() {
     bootstrapFile,
     addUploads,
     send,
+    stop,
   };
+}
+
+async function recoverStoppedWorkspace(
+  environment: Parameters<typeof fetchWorkspace>[0],
+  previousMessageCount: number,
+): Promise<BuilderWorkspace> {
+  let workspace = await fetchWorkspace(environment);
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const newMessages = workspace.messages.slice(previousMessageCount);
+    if (
+      newMessages.some(
+        (message) =>
+          message.role === "assistant" && message.status === "stopped",
+      )
+    ) {
+      return workspace;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
+    workspace = await fetchWorkspace(environment);
+  }
+  return workspace;
 }
