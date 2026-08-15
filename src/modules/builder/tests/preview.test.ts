@@ -51,13 +51,16 @@ describe("preview document", () => {
     expect(result).toContain("'unsafe-eval'");
     expect(result).toContain('e.message==="Script error."');
     expect(result).toContain("<style>img{max-width:100%}</style>");
+    expect(result).toContain(
+      `<body><div style="padding-inline:15px">${source}</div>`,
+    );
     expect(result.indexOf("rbccm.2.css")).toBeLessThan(result.indexOf(source));
     expect(result.indexOf(source)).toBeLessThan(
       result.indexOf("inline/script-01.js"),
     );
   });
 
-  it("keeps CMWeb and the explicit fallback unstyled until assets are added", () => {
+  it("keeps CMWeb and the explicit fallback without site assets", () => {
     for (const siteProfile of ["cmweb", "unstyled"] as const) {
       const result = createPreviewDocument("<p>Plain</p>", policy, {
         siteProfile,
@@ -67,6 +70,22 @@ describe("preview document", () => {
       expect(result).not.toContain("<style");
       expect(result).not.toContain('rel="stylesheet"');
     }
+  });
+
+  it("pads CMWeb preview content while leaving the fallback unwrapped", () => {
+    const source = "<p>Plain</p>";
+    const cmweb = createPreviewDocument(source, policy, {
+      siteProfile: "cmweb",
+    });
+    const unstyled = createPreviewDocument(source, policy, {
+      siteProfile: "unstyled",
+    });
+
+    expect(cmweb).toContain(
+      `<body><div style="padding-inline:15px">${source}</div>`,
+    );
+    expect(unstyled).toContain(`<body>${source}`);
+    expect(unstyled).not.toContain('<div style="padding-inline:15px">');
   });
 
   it("routes production image paths through their CMS-first preview proxies", () => {

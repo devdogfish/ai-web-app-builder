@@ -23,6 +23,10 @@ export interface PreviewAssetManifest {
   bodyScripts: PreviewScriptAsset[];
 }
 
+export interface PreviewContentContainer {
+  style: string;
+}
+
 const rbccmManifest = rbccmManifestJson as PreviewAssetManifest;
 
 // CMWeb intentionally remains empty until its production assets are supplied.
@@ -48,10 +52,25 @@ const manifests: Record<PreviewSiteProfileId, PreviewAssetManifest> = {
   unstyled: unstyledManifest,
 };
 
+const contentContainers: Record<
+  PreviewSiteProfileId,
+  PreviewContentContainer | null
+> = {
+  rbccm: { style: "padding-inline:15px" },
+  cmweb: { style: "padding-inline:15px" },
+  unstyled: null,
+};
+
 export function getPreviewAssetManifest(
   profile: PreviewSiteProfileId,
 ): PreviewAssetManifest {
   return manifests[profile];
+}
+
+export function getPreviewContentContainer(
+  profile: PreviewSiteProfileId,
+): PreviewContentContainer | null {
+  return contentContainers[profile];
 }
 
 export function previewProfileHasAssets(profile: PreviewSiteProfileId): boolean {

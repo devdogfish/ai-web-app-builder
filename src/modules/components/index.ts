@@ -6,6 +6,7 @@ export * from "./contracts";
 export * from "./format";
 export * from "./format-source";
 export * from "./identity";
+export * from "./image-fields";
 export * from "./repository";
 export * from "./schema";
 export * from "./source";

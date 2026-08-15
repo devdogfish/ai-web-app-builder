@@ -11,11 +11,21 @@ import {
 import { createArticleRepository } from "../db";
 import type { ArticleWorkspace } from "../db";
 import type { BuilderEnvironment } from "../environment/types";
+import { ArticleImageRepository } from "../../article-images/repository";
 
 vi.mock("server-only", () => ({}));
 vi.mock("../db/server", () => ({ getArticleRepository: vi.fn() }));
 vi.mock("../core/server", () => ({
   assertWorkspaceEnvironment: vi.fn(),
+  builderArticleImageSources: (
+    _environment: BuilderEnvironment,
+    images: Array<{ position: number }>,
+  ) =>
+    new Set(
+      images.map(
+        (image) => `/media/articles/article-title-${image.position}.webp`,
+      ),
+    ),
   toBuilderWorkspace: (
     environment: BuilderEnvironment,
     workspace: ArticleWorkspace | null,
@@ -92,8 +102,10 @@ vi.mock("../uploads/storage", () => ({
 vi.mock("../server/refinement", () => ({ runBuilderRefinement: vi.fn() }));
 
 let bootstrapBuilderFromFileAction: typeof import("../server/actions").bootstrapBuilderFromFileAction;
+let runBuilderActionAction: typeof import("../server/actions").runBuilderActionAction;
 let getArticleRepository: typeof import("../db/server").getArticleRepository;
 let runBuilderRefinement: typeof import("../server/refinement").runBuilderRefinement;
+let prepareManagedSourceForSave: typeof import("../server/component-integration").prepareManagedSourceForSave;
 
 const environment = {
   articleId: "article-1",
@@ -105,9 +117,12 @@ const environment = {
 const previousProvider = process.env.AI_PROVIDER;
 
 beforeAll(async () => {
-  ({ bootstrapBuilderFromFileAction } = await import("../server/actions"));
+  ({ bootstrapBuilderFromFileAction, runBuilderActionAction } =
+    await import("../server/actions"));
   ({ getArticleRepository } = await import("../db/server"));
   ({ runBuilderRefinement } = await import("../server/refinement"));
+  ({ prepareManagedSourceForSave } =
+    await import("../server/component-integration"));
 });
 
 describe("DOCX bootstrap action", () => {
@@ -117,6 +132,7 @@ describe("DOCX bootstrap action", () => {
     repository = createArticleRepository({ filename: ":memory:" });
     vi.mocked(getArticleRepository).mockReturnValue(repository);
     vi.mocked(runBuilderRefinement).mockReset();
+    vi.mocked(prepareManagedSourceForSave).mockClear();
     process.env.AI_PROVIDER = "cohere";
   });
 
@@ -149,5 +165,35 @@ describe("DOCX bootstrap action", () => {
       "article.docx",
     ]);
     expect(runBuilderRefinement).not.toHaveBeenCalled();
+  });
+
+  it("passes current Article Image paths to authoritative source saving", async () => {
+    repository.bootstrapArticle({
+      article: {
+        id: environment.articleId,
+        website: "website-1",
+        articleType: "article-type-1",
+      },
+      html: "<p>Before</p>",
+      hostHtml: "<p>Before</p>",
+    });
+    new ArticleImageRepository(repository.sqlite).add(environment.articleId, [
+      {
+        name: "hero.webp",
+        mediaType: "image/webp",
+        bytes: new Uint8Array([1]),
+      },
+    ]);
+
+    const result = await runBuilderActionAction(environment, {
+      type: "apply-source",
+      content: "<p>After</p>",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(prepareManagedSourceForSave).toHaveBeenCalledWith("<p>After</p>", {
+      availableImageSources: new Set(["/media/articles/article-title-1.webp"]),
+      previousSource: "<p>Before</p>",
+    });
   });
 });

@@ -4,6 +4,7 @@ import type {
 } from "@/modules/builder/environment/types";
 import {
   getPreviewAssetManifest,
+  getPreviewContentContainer,
   previewProfileHasAssets,
   type PreviewScriptAsset,
 } from "./site-profiles";
@@ -125,6 +126,15 @@ function imageProxyScript(
   return `<script>(function(){const proxies=${serialized};const apply=image=>{if(!(image instanceof HTMLImageElement)||image.dataset.previewProxyApplied)return;let path;try{path=new URL(image.getAttribute("src")||"",document.baseURI).pathname}catch{return}const proxy=proxies[path];if(!proxy)return;image.dataset.previewProxyApplied="true";image.removeAttribute("srcset");image.closest("picture")?.querySelectorAll("source").forEach(source=>source.removeAttribute("srcset"));image.addEventListener("error",()=>parent.postMessage({source:"article-builder-preview",kind:"runtime-error",value:"Preview could not load "+path+" from CMS or database."},"*"),{once:true});image.src=proxy};document.querySelectorAll("img").forEach(apply);new MutationObserver(records=>records.forEach(record=>record.addedNodes.forEach(node=>{if(node instanceof HTMLImageElement)apply(node);else if(node instanceof Element)node.querySelectorAll("img").forEach(apply)}))).observe(document.body,{childList:true,subtree:true})})();</script>`;
 }
 
+function previewContent(
+  source: string,
+  profile: PreviewSiteProfileId,
+): string {
+  const container = getPreviewContentContainer(profile);
+  if (!container) return source;
+  return `<div style="${escapeAttribute(container.style)}">${source}</div>`;
+}
+
 export function createPreviewDocument(
   source: string,
   policy: WebsiteAssetPolicy,
@@ -142,5 +152,5 @@ export function createPreviewDocument(
   );
   // A fixed outer envelope makes the CSP the first parsed policy even when
   // Source contains misleading comments, malformed head tags, or a full doc.
-  return `<!doctype html><html><head>${injectedHead}</head><body>${source}${imageProxyScript(options.imageProxies ?? [])}${siteAssets.body}</body></html>`;
+  return `<!doctype html><html><head>${injectedHead}</head><body>${previewContent(source, profile)}${imageProxyScript(options.imageProxies ?? [])}${siteAssets.body}</body></html>`;
 }

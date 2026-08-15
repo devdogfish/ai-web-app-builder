@@ -25,6 +25,21 @@ vi.mock("../environment/host-sync", () => ({
 vi.mock("../ai/server", () => ({ createArticleModelFromEnv: vi.fn() }));
 vi.mock("../core/server", () => ({
   assertWorkspaceEnvironment: vi.fn(),
+  builderArticleImageSources: (
+    _environment: BuilderEnvironment,
+    images: Array<{ mediaType: string; position: number }>,
+  ) =>
+    new Set(
+      images.map((image) => {
+        const extension =
+          image.mediaType === "image/png"
+            ? "png"
+            : image.mediaType === "image/jpeg"
+              ? "jpg"
+              : "webp";
+        return `/media/articles/article-title-${image.position}.${extension}`;
+      }),
+    ),
   toBuilderWorkspace: (
     environment: BuilderEnvironment,
     workspace: ArticleWorkspace | null,
@@ -234,6 +249,13 @@ describe("Builder refinement cancellation", () => {
 
   it("repairs rejected Component syntax before committing the edit", async () => {
     const prompts: string[] = [];
+    new ArticleImageRepository(repository.sqlite).add(environment.articleId, [
+      {
+        name: "source.webp",
+        mediaType: "image/webp",
+        bytes: new Uint8Array([1]),
+      },
+    ]);
     vi.mocked(createArticleModelFromEnv).mockReturnValue({
       provider: "openrouter",
       model: "test",
@@ -247,8 +269,8 @@ describe("Builder refinement cancellation", () => {
             summary: "Convert quote",
             articleHtml:
               prompts.length === 1
-                ? '<article><Component id="attributed-quote" data={ quote: html`<p>Quote</p>`, author: "Source", image: "/source.jpg", imageAlt: "Source" } /></article>'
-                : '<article><p><Component id="attributed-quote" data={{ quote: html`<p>Quote</p>`, author: "Source", image: "/source.jpg", imageAlt: "Source" }} /></p></article>',
+                ? '<article><Component id="attributed-quote" data={ quote: html`<p>Quote</p>`, author: "Source", image: "/media/articles/article-title-1.webp", imageAlt: "Source" } /></article>'
+                : '<article><p><Component id="attributed-quote" data={{ quote: html`<p>Quote</p>`, author: "Source", image: "/media/articles/article-title-1.webp", imageAlt: "Source" }} /></p></article>',
           },
         } as const;
       },

@@ -18,7 +18,11 @@ import {
   planModelContext,
 } from "../content";
 import type { BuilderWorkspace } from "../core/contracts";
-import { assertWorkspaceEnvironment, toBuilderWorkspace } from "../core/server";
+import {
+  assertWorkspaceEnvironment,
+  builderArticleImageSources,
+  toBuilderWorkspace,
+} from "../core/server";
 import {
   hasRefinementInput,
   resolveRefinementPrompt,
@@ -298,10 +302,15 @@ export async function runBuilderRefinement(
         if (modelResult.action === "edit") {
           const edit = await prepareArticleModelEdit(modelResult, {
             prepare: (source) =>
-              prepareManagedSourceForSave(
-                source,
-                workspace.currentVersion.html,
-              ),
+              prepareManagedSourceForSave(source, {
+                availableImageSources: builderArticleImageSources(
+                  environment,
+                  new ArticleImageRepository(repository.sqlite).list(
+                    environment.articleId,
+                  ),
+                ),
+                previousSource: workspace.currentVersion.html,
+              }),
             repair: async ({ error }) => {
               const repairPrompt = buildArticleEditRepairPrompt(
                 effectivePrompt,

@@ -61,7 +61,10 @@ export function builderComponentModelContext(
 
 export async function prepareManagedSourceForSave(
   source: string,
-  previousSource?: string,
+  options: {
+    availableImageSources: ReadonlySet<string>;
+    previousSource?: string;
+  },
 ): Promise<{ source: string; compiledHtml: string }> {
   const repository = getComponentRepository();
   const resolved = resolveComponentTagReferences(source, (tag) =>
@@ -70,7 +73,8 @@ export async function prepareManagedSourceForSave(
   const formatted = await formatManagedArticleSource(resolved, repository);
   await assertValidManagedArticleSource(formatted, repository, {
     allowBlank: true,
-    previousSource,
+    availableImageSources: options.availableImageSources,
+    previousSource: options.previousSource,
   });
   return {
     source: formatted,
@@ -80,6 +84,7 @@ export async function prepareManagedSourceForSave(
 
 export async function prepareHistoricalSourceForRestore(
   historicalSource: string,
+  availableImageSources: ReadonlySet<string>,
 ): Promise<{ source: string; compiledHtml: string }> {
   const repository = getComponentRepository();
   let source = historicalSource;
@@ -96,7 +101,7 @@ export async function prepareHistoricalSourceForRestore(
       repository,
     );
   }
-  return prepareManagedSourceForSave(source);
+  return prepareManagedSourceForSave(source, { availableImageSources });
 }
 
 export async function assertManagedModelOutput(

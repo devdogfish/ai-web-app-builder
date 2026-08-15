@@ -4,7 +4,12 @@ import {
   type ComponentLookup,
 } from "../../components/compiler";
 import { formatArticleSource } from "../../components/format";
-import { parseArticleSource as parseManagedReferences } from "../../components/source";
+import { unavailableComponentImageValues } from "../../components/image-fields";
+import { mergeComponentData } from "../../components/sandbox";
+import {
+  parseArticleSource as parseManagedReferences,
+  unwrapComponentSourceData,
+} from "../../components/source";
 
 import { BUILDER_DOCUMENT_LIMITS } from "../config/builder";
 import { formatArticleHtml } from "./format";
@@ -36,6 +41,7 @@ export async function assertValidManagedArticleSource(
   options: {
     allowBlank?: boolean;
     allowDeleted?: boolean;
+    availableImageSources?: ReadonlySet<string>;
     previousSource?: string;
   } = {},
 ): Promise<void> {
@@ -59,6 +65,26 @@ export async function assertValidManagedArticleSource(
     throw new ManagedArticleSourceError(
       componentValidation.issues.map((issue) => issue.message).join(" "),
     );
+  }
+
+  if (options.availableImageSources !== undefined) {
+    for (const reference of parsed.references) {
+      const definition = componentDefinition(lookup, reference.id);
+      if (!definition) continue;
+      const [unavailable] = unavailableComponentImageValues(
+        definition.schema,
+        mergeComponentData(
+          definition.defaultData,
+          unwrapComponentSourceData(reference.data) as Record<string, unknown>,
+        ),
+        options.availableImageSources,
+      );
+      if (unavailable) {
+        throw new ManagedArticleSourceError(
+          `${unavailable.path} must use an image attached to this Article.`,
+        );
+      }
+    }
   }
 
   if (options.previousSource !== undefined) {

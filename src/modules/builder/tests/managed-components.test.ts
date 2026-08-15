@@ -35,9 +35,23 @@ export default function SimpleQuote({ quote, attribution }: Props) {
   updatedAt: new Date(0),
   deletedAt: null,
 };
+const imageGallery: ComponentDefinition = {
+  ...prepareComponentDefinition({
+    source: `
+type Props = { hero?: ImageSource; galleries: Array<Array<ImageSource>> };
+export default function ImageGallery({ hero = "/media/default.webp", galleries }: Props) {
+  return <div><img src={hero} alt="" />{galleries.flat().map(src => <img src={src} alt="" />)}</div>;
+}`,
+  }),
+  id: "image-gallery",
+  createdAt: new Date(0),
+  updatedAt: new Date(0),
+  deletedAt: null,
+};
 const lookup = new Map([
   [tabs.id, tabs],
   [simpleQuote.id, simpleQuote],
+  [imageGallery.id, imageGallery],
 ]);
 
 describe("managed Article Source", () => {
@@ -110,5 +124,37 @@ describe("managed Article Source", () => {
         previousSource: previous,
       }),
     ).rejects.toThrow("confirmed Detach action");
+  });
+
+  it("allows only attached Article Images in Component data", async () => {
+    const source =
+      '<Component type="image-gallery" data={{ hero: "/media/hero.webp", galleries: [["/media/nested.webp"]] }} />';
+
+    await expect(
+      assertValidManagedArticleSource(source, lookup, {
+        availableImageSources: new Set([
+          "/media/hero.webp",
+          "/media/nested.webp",
+        ]),
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      assertValidManagedArticleSource(source, lookup, {
+        availableImageSources: new Set(["/media/hero.webp"]),
+      }),
+    ).rejects.toThrow(
+      "data.galleries[0][0] must use an image attached to this Article",
+    );
+  });
+
+  it("applies Article Image policy to default Component data", async () => {
+    const source =
+      '<Component type="image-gallery" data={{ galleries: [["/media/nested.webp"]] }} />';
+
+    await expect(
+      assertValidManagedArticleSource(source, lookup, {
+        availableImageSources: new Set(["/media/nested.webp"]),
+      }),
+    ).rejects.toThrow("data.hero must use an image attached to this Article");
   });
 });

@@ -7,6 +7,8 @@ import { BracesIcon, PencilIcon, UnlinkIcon, XIcon } from "lucide-react";
 import { Button, buttonVariants } from "@/modules/builder/ui/button";
 import { Separator } from "@/modules/builder/ui/separator";
 import { ComponentDataForm } from "@/modules/components/ui/component-data-form";
+import type { ComponentImageOption } from "@/modules/components/ui/component-data-form";
+import { unavailableComponentImageValues } from "@/modules/components/image-fields";
 import type { ComponentData, ComponentSpec } from "@/modules/components";
 
 export function ComponentInstanceInspector({
@@ -16,6 +18,7 @@ export function ComponentInstanceInspector({
   onClose,
   onSave,
   onDetach,
+  imageOptions,
 }: {
   definition: ComponentSpec | null;
   data: ComponentData;
@@ -23,8 +26,16 @@ export function ComponentInstanceInspector({
   onClose: () => void;
   onSave: (data: ComponentData) => void | Promise<void>;
   onDetach: () => void;
+  imageOptions: readonly ComponentImageOption[];
 }) {
   const [draft, setDraft] = useState(data);
+  const unavailableImages = definition
+    ? unavailableComponentImageValues(
+        definition.schema,
+        draft,
+        new Set(imageOptions.map((option) => option.productionPath)),
+      )
+    : [];
 
   useEffect(() => {
     // This intentionally resets disposable form state when another instance opens.
@@ -79,6 +90,7 @@ export function ComponentInstanceInspector({
             value={draft}
             onChange={setDraft}
             disabled={saving}
+            imageOptions={imageOptions}
           />
         ) : (
           <p className="text-sm text-muted-foreground">
@@ -106,7 +118,7 @@ export function ComponentInstanceInspector({
         <Button
           type="button"
           size="sm"
-          disabled={!definition || saving}
+          disabled={!definition || saving || unavailableImages.length > 0}
           onClick={() => void onSave(draft)}
         >
           Save changes

@@ -76,6 +76,7 @@ import type {
 import type { BuilderEnvironment } from "@/modules/builder/environment/types";
 import { getWebsiteConfig } from "@/modules/builder/environment/websites";
 import { ComponentInstanceInspector } from "@/modules/components/ui/component-instance-inspector";
+import { unavailableComponentImageValues } from "@/modules/components/image-fields";
 import {
   detachComponentDraftAction,
   getComponentSpecAction,
@@ -259,6 +260,17 @@ export function WorkbenchPanel({
         );
         return;
       }
+      const unavailableImages = unavailableComponentImageValues(
+        componentSpec.schema,
+        data,
+        new Set(articleImages.map((image) => image.productionPath)),
+      );
+      if (unavailableImages.length > 0) {
+        toast.error(
+          `${unavailableImages[0]!.path} must use an image attached to this Article.`,
+        );
+        return;
+      }
       setComponentBusy(true);
       try {
         const selected =
@@ -299,6 +311,7 @@ export function WorkbenchPanel({
       formatSource,
       onApply,
       onDraftChange,
+      articleImages,
     ],
   );
 
@@ -571,6 +584,12 @@ export function WorkbenchPanel({
                   }}
                   onSave={saveComponentData}
                   onDetach={() => setConfirmDetach(true)}
+                  imageOptions={articleImages.map((image) => ({
+                    id: image.id,
+                    label: image.originalName,
+                    productionPath: image.productionPath,
+                    previewUrl: image.databasePreviewUrl,
+                  }))}
                 />
               ) : null}
             </div>

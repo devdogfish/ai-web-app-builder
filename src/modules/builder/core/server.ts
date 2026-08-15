@@ -109,19 +109,9 @@ export function toBuilderWorkspace(
     })),
     articleImages: articleImages.map((image) => {
       const website = getWebsiteConfig(environment.website);
-      const extension =
-        image.mediaType === "image/png"
-          ? "png"
-          : image.mediaType === "image/jpeg"
-            ? "jpg"
-            : "webp";
-      const productionPath = replaceAssetExtension(
-        deriveAssetPath(
-          website.assetPolicy,
-          getArticleAssetContext(environment),
-          image.position,
-        ),
-        extension,
+      const productionPath = builderArticleImageProductionPath(
+        environment,
+        image,
       );
       return {
         id: image.id,
@@ -149,6 +139,37 @@ export function toBuilderWorkspace(
     ),
     hostSyncPending: workspace.hostSyncPending,
   };
+}
+
+export function builderArticleImageProductionPath(
+  environment: BuilderEnvironment,
+  image: Pick<ArticleImage, "mediaType" | "position">,
+): string {
+  const extension =
+    image.mediaType === "image/png"
+      ? "png"
+      : image.mediaType === "image/jpeg"
+        ? "jpg"
+        : "webp";
+  return replaceAssetExtension(
+    deriveAssetPath(
+      getWebsiteConfig(environment.website).assetPolicy,
+      getArticleAssetContext(environment),
+      image.position,
+    ),
+    extension,
+  );
+}
+
+export function builderArticleImageSources(
+  environment: BuilderEnvironment,
+  images: readonly Pick<ArticleImage, "mediaType" | "position">[],
+): ReadonlySet<string> {
+  return new Set(
+    images.map((image) =>
+      builderArticleImageProductionPath(environment, image),
+    ),
+  );
 }
 
 function isModelImage(name: string): boolean {

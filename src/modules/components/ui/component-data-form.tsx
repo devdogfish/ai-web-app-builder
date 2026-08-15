@@ -15,6 +15,7 @@ import {
   Field,
   FieldContent,
   FieldDescription,
+  FieldError,
   FieldGroup,
   FieldLabel,
   FieldLegend,
@@ -39,18 +40,27 @@ import type {
   ComponentUiHints,
 } from "@/modules/components";
 
+export interface ComponentImageOption {
+  id: string;
+  label: string;
+  productionPath: string;
+  previewUrl: string;
+}
+
 export function ComponentDataForm({
   schema,
   uiHints,
   value,
   onChange,
   disabled = false,
+  imageOptions,
 }: {
   schema: ComponentSchema;
   uiHints?: ComponentUiHints;
   value: ComponentData;
   onChange: (value: ComponentData) => void;
   disabled?: boolean;
+  imageOptions?: readonly ComponentImageOption[];
 }) {
   const root = schema;
   const hints = uiHints ?? {};
@@ -91,6 +101,7 @@ export function ComponentDataForm({
             value={value[name]}
             required={root.required?.includes(name) ?? false}
             disabled={disabled}
+            imageOptions={imageOptions}
             onChange={(next) => onChange({ ...value, [name]: next })}
           />
         );
@@ -108,6 +119,7 @@ function SchemaField({
   value,
   required,
   disabled,
+  imageOptions,
   onChange,
 }: {
   name: string;
@@ -118,8 +130,50 @@ function SchemaField({
   value: unknown;
   required: boolean;
   disabled: boolean;
+  imageOptions?: readonly ComponentImageOption[];
   onChange: (value: unknown) => void;
 }) {
+  return (
+    <SchemaValue
+      name={name}
+      path={path}
+      schema={schema}
+      hint={hint}
+      allHints={allHints}
+      value={value}
+      required={required}
+      disabled={disabled}
+      imageOptions={imageOptions}
+      onChange={onChange}
+    />
+  );
+}
+
+function SchemaValue({
+  name,
+  path,
+  schema,
+  hint,
+  allHints,
+  value,
+  required,
+  disabled,
+  imageOptions,
+  onChange,
+}: {
+  name: string;
+  path: string;
+  schema: ComponentFieldSchema;
+  hint: ComponentFieldUiHint;
+  allHints: ComponentUiHints;
+  value: unknown;
+  required: boolean;
+  disabled: boolean;
+  imageOptions?: readonly ComponentImageOption[];
+  onChange: (value: unknown) => void;
+}) {
+  const generatedId = useId();
+  const id = `component-data-${generatedId}`;
   const label = hint.label || humanize(name);
   const help = hint.helpText || schema.description;
 
@@ -166,6 +220,7 @@ function SchemaField({
                   value={item}
                   required
                   disabled={disabled}
+                  imageOptions={imageOptions}
                   onChange={(next) =>
                     onChange(
                       items.map((current, itemIndex) =>
@@ -197,47 +252,6 @@ function SchemaField({
     );
   }
 
-  return (
-    <SchemaValue
-      name={name}
-      path={path}
-      schema={schema}
-      hint={hint}
-      allHints={allHints}
-      value={value}
-      required={required}
-      disabled={disabled}
-      onChange={onChange}
-    />
-  );
-}
-
-function SchemaValue({
-  name,
-  path,
-  schema,
-  hint,
-  allHints,
-  value,
-  required,
-  disabled,
-  onChange,
-}: {
-  name: string;
-  path: string;
-  schema: ComponentFieldSchema;
-  hint: ComponentFieldUiHint;
-  allHints: ComponentUiHints;
-  value: unknown;
-  required: boolean;
-  disabled: boolean;
-  onChange: (value: unknown) => void;
-}) {
-  const generatedId = useId();
-  const id = `component-data-${generatedId}`;
-  const label = hint.label || humanize(name);
-  const help = hint.helpText || schema.description;
-
   if (schema.type === "object") {
     const objectValue = asObject(value);
     const entries = Object.entries(schema.properties).sort(
@@ -267,6 +281,7 @@ function SchemaValue({
                 value={objectValue[childName]}
                 required={schema.required?.includes(childName) ?? false}
                 disabled={disabled}
+                imageOptions={imageOptions}
                 onChange={(next) =>
                   onChange({ ...objectValue, [childName]: next })
                 }
@@ -324,16 +339,89 @@ function SchemaValue({
     );
   }
 
-  if (schema.type === "array") {
+  if (schema.type === "image" && imageOptions) {
+    const selected = imageOptions.find(
+      (option) => option.productionPath === value,
+    );
+    const stale = typeof value === "string" && value.length > 0 && !selected;
+    const selectItems = imageOptions.map((option) => ({
+      label: option.label,
+      value: option.productionPath,
+    }));
     return (
-      <JsonField
-        path={path}
-        label={label}
-        description={help || "Edit this repeatable list as JSON."}
-        value={value ?? []}
-        disabled={disabled}
-        onChange={onChange}
-      />
+      <Field
+        data-disabled={disabled || undefined}
+        data-invalid={stale || undefined}
+      >
+        <FieldLabel htmlFor={id}>{label}</FieldLabel>
+        {selected ? (
+          <div className="overflow-hidden rounded-lg border bg-muted/20">
+            {/* Same-origin authenticated Article Image preview. */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={selected.previewUrl}
+              alt=""
+              className="aspect-video w-full object-cover"
+            />
+            <div className="min-w-0 px-3 py-2">
+              <p className="truncate text-sm font-medium">{selected.label}</p>
+              <p className="truncate font-mono text-[11px] text-muted-foreground">
+                {selected.productionPath}
+              </p>
+            </div>
+          </div>
+        ) : null}
+        <Select
+          items={selectItems}
+          value={selected?.productionPath ?? null}
+          disabled={disabled || imageOptions.length === 0}
+          onValueChange={(next) => {
+            if (next !== null) onChange(next);
+          }}
+        >
+          <SelectTrigger id={id} className="w-full">
+            <SelectValue
+              placeholder={
+                imageOptions.length === 0
+                  ? "Add Article Images first"
+                  : hint.placeholder || `Choose ${label}`
+              }
+            />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              {imageOptions.map((option) => (
+                <SelectItem key={option.id} value={option.productionPath}>
+                  <span className="flex min-w-0 flex-col">
+                    <span className="truncate">{option.label}</span>
+                    <span className="truncate font-mono text-[11px] text-muted-foreground">
+                      {option.productionPath}
+                    </span>
+                  </span>
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+        {!required && typeof value === "string" && value.length > 0 ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={disabled}
+            onClick={() => onChange("")}
+          >
+            Clear image
+          </Button>
+        ) : null}
+        {stale ? (
+          <FieldError>
+            This image is not attached to the Article. Choose an Article Image.
+          </FieldError>
+        ) : help ? (
+          <FieldDescription>{help}</FieldDescription>
+        ) : null}
+      </Field>
     );
   }
 

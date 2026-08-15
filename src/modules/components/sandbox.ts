@@ -113,7 +113,7 @@ export async function renderSandboxedComponent(
   >,
   sourceData: ComponentData,
 ): Promise<string> {
-  const data = deepMerge(definition.defaultData, sourceData) as ComponentData;
+  const data = mergeComponentData(definition.defaultData, sourceData);
   assertValidComponentData(definition.schema, data);
   const props = prepareRuntimeProps(definition.schema, data);
   const program = `${STATIC_JSX_RUNTIME}
@@ -174,7 +174,18 @@ function prepareRuntimeProps(
   return value;
 }
 
-function deepMerge(defaults: unknown, provided: unknown): unknown {
+export function mergeComponentData(
+  defaults: ComponentData,
+  provided: ComponentData,
+): ComponentData;
+export function mergeComponentData(
+  defaults: unknown,
+  provided: unknown,
+): unknown;
+export function mergeComponentData(
+  defaults: unknown,
+  provided: unknown,
+): unknown {
   if (
     defaults &&
     provided &&
@@ -189,7 +200,7 @@ function deepMerge(defaults: unknown, provided: unknown): unknown {
     for (const [key, value] of Object.entries(
       provided as Record<string, unknown>,
     )) {
-      result[key] = deepMerge(result[key], value);
+      result[key] = mergeComponentData(result[key], value);
     }
     return result;
   }

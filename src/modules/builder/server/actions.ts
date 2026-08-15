@@ -19,7 +19,11 @@ import type {
   RefineRequest,
   ReferenceUploadPreview,
 } from "../core/contracts";
-import { assertWorkspaceEnvironment, toBuilderWorkspace } from "../core/server";
+import {
+  assertWorkspaceEnvironment,
+  builderArticleImageSources,
+  toBuilderWorkspace,
+} from "../core/server";
 import { getArticleRepository } from "../db/server";
 import { getArticleIntegration } from "../environment/article-integration";
 import { flushHostSync } from "../environment/host-sync";
@@ -133,7 +137,12 @@ export async function getBuilderWorkspaceAction(
       const existingHtml =
         await getArticleIntegration().getInitialArticleHtml(environment);
       if (existingHtml) {
-        const prepared = await prepareManagedSourceForSave(existingHtml);
+        const prepared = await prepareManagedSourceForSave(existingHtml, {
+          availableImageSources: currentArticleImageSources(
+            environment,
+            repository,
+          ),
+        });
         workspace = repository.bootstrapArticle({
           article: articleRecord(environment),
           html: prepared.source,
@@ -162,6 +171,10 @@ export async function runBuilderActionAction(
     const article = getArticleAssetContext(environment);
     const input = actionSchema.parse(action);
     const repository = getArticleRepository();
+    const availableImageSources = currentArticleImageSources(
+      environment,
+      repository,
+    );
     const existingWorkspace = repository.getWorkspace(environment.articleId);
     if (existingWorkspace) {
       assertWorkspaceEnvironment(existingWorkspace, environment);
@@ -172,10 +185,10 @@ export async function runBuilderActionAction(
         if (!existingWorkspace) {
           throw new BuilderActionError("Bootstrap the Builder Chat first.");
         }
-        const applied = await prepareManagedSourceForSave(
-          input.content,
-          existingWorkspace.currentVersion.html,
-        );
+        const applied = await prepareManagedSourceForSave(input.content, {
+          availableImageSources,
+          previousSource: existingWorkspace.currentVersion.html,
+        });
         repository.applySource({
           articleId: environment.articleId,
           html: applied.source,
@@ -191,7 +204,10 @@ export async function runBuilderActionAction(
           (version) => version.id === input.versionId,
         );
         if (!target) throw new BuilderActionError("Version not found.");
-        const restored = await prepareHistoricalSourceForRestore(target.html);
+        const restored = await prepareHistoricalSourceForRestore(
+          target.html,
+          availableImageSources,
+        );
         repository.rewind({
           articleId: environment.articleId,
           versionId: input.versionId,
@@ -229,7 +245,9 @@ export async function runBuilderActionAction(
         const prepared =
           input.method === "blank"
             ? { source: "", compiledHtml: "" }
-            : await prepareManagedSourceForSave(html);
+            : await prepareManagedSourceForSave(html, {
+                availableImageSources,
+              });
         repository.bootstrapArticle({
           article: articleRecord(environment),
           html: prepared.source,
@@ -298,7 +316,9 @@ export async function bootstrapBuilderFromFileAction(
       article,
       imagePaths: kind === "docx" ? imagePaths : undefined,
     });
-    const preparedSource = await prepareManagedSourceForSave(html);
+    const preparedSource = await prepareManagedSourceForSave(html, {
+      availableImageSources: new Set(imagePaths),
+    });
 
     const repository = getArticleRepository();
     const existingWorkspace = repository.getWorkspace(environment.articleId);
@@ -450,10 +470,15 @@ export async function convertArticleImageToJpegAction(
       pngPath,
       jpegPath,
     );
-    const sourcePrepared = await prepareManagedSourceForSave(
-      nextSource,
-      workspace.currentVersion.html,
+    const availableImageSources = new Set(
+      currentArticleImageSources(environment, repository),
     );
+    availableImageSources.delete(pngPath);
+    availableImageSources.add(jpegPath);
+    const sourcePrepared = await prepareManagedSourceForSave(nextSource, {
+      availableImageSources,
+      previousSource: workspace.currentVersion.html,
+    });
     repository.db.transaction(() => {
       imageRepository.replaceBinary(environment.articleId, imageId, {
         name: image.originalName,
@@ -694,6 +719,16 @@ async function result<T>(
   } catch (error) {
     return { ok: false, error: actionErrorMessage(error) };
   }
+}
+
+function currentArticleImageSources(
+  environment: BuilderEnvironment,
+  repository: ReturnType<typeof getArticleRepository>,
+): ReadonlySet<string> {
+  return builderArticleImageSources(
+    environment,
+    new ArticleImageRepository(repository.sqlite).list(environment.articleId),
+  );
 }
 
 function builderWorkspace(
