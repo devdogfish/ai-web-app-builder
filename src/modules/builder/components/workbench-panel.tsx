@@ -87,6 +87,7 @@ import type {
   ComponentSpec,
   ComponentSummary,
 } from "@/modules/components/contracts";
+import { mergeComponentData } from "@/modules/components/merge-data";
 import { validateComponentData } from "@/modules/components/schema";
 import {
   parseArticleSource,
@@ -678,33 +679,6 @@ export function WorkbenchPanel({
       </AlertDialog>
     </Card>
   );
-}
-
-function mergeComponentData(
-  defaults: ComponentData,
-  provided: ComponentData,
-): ComponentData {
-  return mergeObjects(defaults, provided) as ComponentData;
-}
-
-function mergeObjects(defaults: unknown, provided: unknown): unknown {
-  if (
-    defaults &&
-    provided &&
-    typeof defaults === "object" &&
-    typeof provided === "object" &&
-    !Array.isArray(defaults) &&
-    !Array.isArray(provided)
-  ) {
-    const result = { ...(defaults as Record<string, unknown>) };
-    for (const [key, value] of Object.entries(
-      provided as Record<string, unknown>,
-    )) {
-      result[key] = mergeObjects(result[key], value);
-    }
-    return result;
-  }
-  return provided;
 }
 
 function DiffToggle({

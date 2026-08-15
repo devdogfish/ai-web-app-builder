@@ -121,22 +121,33 @@ export function useBuilderController() {
     if (success) toast.success(success);
   }
 
-  const applyDraft = async () => {
-    if (!hasDraft) return;
+  async function attempt<T>(
+    operation: () => Promise<T>,
+    withLoading = false,
+  ): Promise<T | undefined> {
+    if (withLoading) setLoading(true);
     try {
-      await action({ type: "apply-source", content: draft }, "Saved.");
+      return await operation();
     } catch (error) {
       toast.error((error as Error).message);
+      return undefined;
+    } finally {
+      if (withLoading) setLoading(false);
     }
+  }
+
+  const applyDraft = async () => {
+    if (!hasDraft) return;
+    await attempt(() =>
+      action({ type: "apply-source", content: draft }, "Saved."),
+    );
   };
 
   const restoreVersion = async (versionId: string) => {
     if (versionId === workspace?.currentVersionId) return;
-    try {
-      await action({ type: "rewind", versionId }, "Version restored.");
-    } catch (error) {
-      toast.error((error as Error).message);
-    }
+    await attempt(() =>
+      action({ type: "rewind", versionId }, "Version restored."),
+    );
   };
 
   const rewind = async () => {
@@ -145,101 +156,77 @@ export function useBuilderController() {
   };
 
   const startNewSession = async () => {
-    try {
-      await action({ type: "start-new-session" }, "New session started.");
-    } catch (error) {
-      toast.error((error as Error).message);
-    }
+    await attempt(() =>
+      action({ type: "start-new-session" }, "New session started."),
+    );
   };
 
   const bootstrap = async (input: {
     method: "blank" | "html-paste";
     content?: string;
   }) => {
-    try {
-      setLoading(true);
-      await action({ type: "bootstrap", ...input });
-    } catch (error) {
-      toast.error((error as Error).message);
-    } finally {
-      setLoading(false);
-    }
+    await attempt(() => action({ type: "bootstrap", ...input }), true);
   };
 
   const bootstrapFile = async (file: File) => {
-    try {
-      setLoading(true);
-      adopt(await bootstrapFromFile(environment, file));
-    } catch (error) {
-      toast.error((error as Error).message);
-    } finally {
-      setLoading(false);
-    }
+    const next = await attempt(
+      () => bootstrapFromFile(environment, file),
+      true,
+    );
+    if (next) adopt(next);
   };
 
   const addUploads = async (files: File[]) => {
-    try {
-      const next = await uploadReferences(environment, files);
-      setWorkspace(next);
-      const added = next.uploads.filter(
-        (upload) =>
-          !workspace?.uploads.some((current) => current.id === upload.id),
-      );
-      setSelectedUploadIds((current) => [
-        ...current,
-        ...added.map((upload) => upload.id),
-      ]);
-    } catch (error) {
-      toast.error((error as Error).message);
-    }
+    const next = await attempt(() => uploadReferences(environment, files));
+    if (!next) return;
+    setWorkspace(next);
+    const added = next.uploads.filter(
+      (upload) =>
+        !workspace?.uploads.some((current) => current.id === upload.id),
+    );
+    setSelectedUploadIds((current) => [
+      ...current,
+      ...added.map((upload) => upload.id),
+    ]);
   };
 
   const addArticleImages = async (files: File[]): Promise<boolean> => {
-    try {
-      const next = await uploadArticleImages(environment, files);
-      setWorkspace(next);
-      toast.success(
-        files.length === 1
-          ? "Image added to the article."
-          : `${files.length} images added to the article.`,
-      );
-      return true;
-    } catch (error) {
-      toast.error((error as Error).message);
-      return false;
-    }
+    const next = await attempt(() => uploadArticleImages(environment, files));
+    if (!next) return false;
+    setWorkspace(next);
+    toast.success(
+      files.length === 1
+        ? "Image added to the article."
+        : `${files.length} images added to the article.`,
+    );
+    return true;
   };
 
   const reorderImages = async (orderedImageIds: string[]): Promise<boolean> => {
-    try {
-      setWorkspace(await reorderArticleImages(environment, orderedImageIds));
-      return true;
-    } catch (error) {
-      toast.error((error as Error).message);
-      return false;
-    }
+    const next = await attempt(() =>
+      reorderArticleImages(environment, orderedImageIds),
+    );
+    if (!next) return false;
+    setWorkspace(next);
+    return true;
   };
 
   const removeImage = async (imageId: string): Promise<boolean> => {
-    try {
-      setWorkspace(await removeArticleImage(environment, imageId));
-      toast.success("Image removed.");
-      return true;
-    } catch (error) {
-      toast.error((error as Error).message);
-      return false;
-    }
+    const next = await attempt(() => removeArticleImage(environment, imageId));
+    if (!next) return false;
+    setWorkspace(next);
+    toast.success("Image removed.");
+    return true;
   };
 
   const convertImageToJpeg = async (imageId: string): Promise<boolean> => {
-    try {
-      adopt(await convertArticleImageToJpeg(environment, imageId));
-      toast.success("Image converted to JPEG.");
-      return true;
-    } catch (error) {
-      toast.error((error as Error).message);
-      return false;
-    }
+    const next = await attempt(() =>
+      convertArticleImageToJpeg(environment, imageId),
+    );
+    if (!next) return false;
+    adopt(next);
+    toast.success("Image converted to JPEG.");
+    return true;
   };
 
   const send = async (

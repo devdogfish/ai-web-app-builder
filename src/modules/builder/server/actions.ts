@@ -12,19 +12,12 @@ import {
   prepareBootstrapHtml,
   replaceAssetExtension,
 } from "../content";
-import { ArticleImageRepository } from "../../article-images/repository";
 import type {
   BuilderAction,
   BuilderWorkspace,
   RefineRequest,
   ReferenceUploadPreview,
 } from "../core/contracts";
-import {
-  assertWorkspaceEnvironment,
-  builderArticleImageSources,
-  toBuilderWorkspace,
-} from "../core/server";
-import { getArticleRepository } from "../db/server";
 import { getArticleIntegration } from "../environment/article-integration";
 import { flushHostSync } from "../environment/host-sync";
 import {
@@ -32,15 +25,9 @@ import {
   prepareProductionImage,
 } from "../environment/production-images";
 import { resolveAuthorizedEnvironment } from "../environment/request-resolver";
-import type {
-  BuilderEnvironment,
-  EnvironmentReference,
-} from "../environment/types";
-import {
-  getArticleAssetContext,
-  getWebsiteConfig,
-} from "../environment/websites";
+import type { EnvironmentReference } from "../environment/types";
 import { publicBuilderError } from "./errors";
+import { createBuilderOperation, environmentSchema } from "./operation";
 import { runBuilderRefinement } from "./refinement";
 import {
   compileBuilderPreviewSource,
@@ -54,19 +41,13 @@ import {
   assertValidReferenceUploads,
   buildModelUploadText,
   fileExtension,
+  isModelImage,
   serializeModelUpload,
 } from "../uploads";
 import { getUploadStore } from "../uploads/storage";
 
 export type ActionResult<T> =
   Readonly<{ ok: true; data: T }> | Readonly<{ ok: false; error: string }>;
-
-const environmentSchema = z.object({
-  articleId: z.string().trim().min(1).max(256),
-  articleTitle: z.string().trim().min(1).max(500),
-  articleSlug: z.string().trim().min(1).max(500),
-  website: z.enum(["rbccm", "cmweb"]),
-});
 
 const actionSchema = z.discriminatedUnion("type", [
   z.object({
@@ -127,24 +108,18 @@ export async function getBuilderWorkspaceAction(
   reference: EnvironmentReference,
 ): Promise<ActionResult<BuilderWorkspace>> {
   return result(async () => {
-    const environment = await resolveAuthorizedEnvironment(
-      environmentSchema.parse(reference),
-      "read",
-    );
-    const repository = getArticleRepository();
-    let workspace = repository.getWorkspace(environment.articleId);
+    const context = await createBuilderOperation(reference, "read");
+    const { environment, repository } = context;
+    let workspace = context.workspace;
     if (!workspace) {
       const existingHtml =
         await getArticleIntegration().getInitialArticleHtml(environment);
       if (existingHtml) {
         const prepared = await prepareManagedSourceForSave(existingHtml, {
-          availableImageSources: currentArticleImageSources(
-            environment,
-            repository,
-          ),
+          availableImageSources: context.imageSources(),
         });
         workspace = repository.bootstrapArticle({
-          article: articleRecord(environment),
+          article: context.articleRecord,
           html: prepared.source,
           hostHtml: prepared.compiledHtml,
         });
@@ -152,9 +127,8 @@ export async function getBuilderWorkspaceAction(
     }
     if (workspace) {
       await flushHostSync(environment);
-      workspace = repository.getWorkspace(environment.articleId);
     }
-    return builderWorkspace(environment, repository, workspace);
+    return context.toWorkspace();
   });
 }
 
@@ -163,22 +137,11 @@ export async function runBuilderActionAction(
   action: BuilderAction,
 ): Promise<ActionResult<BuilderWorkspace>> {
   return result(async () => {
-    const environment = await resolveAuthorizedEnvironment(
-      environmentSchema.parse(reference),
-      "mutate",
-    );
-    const website = getWebsiteConfig(environment.website);
-    const article = getArticleAssetContext(environment);
+    const context = await createBuilderOperation(reference, "mutate");
+    const { environment, website, article, repository } = context;
     const input = actionSchema.parse(action);
-    const repository = getArticleRepository();
-    const availableImageSources = currentArticleImageSources(
-      environment,
-      repository,
-    );
-    const existingWorkspace = repository.getWorkspace(environment.articleId);
-    if (existingWorkspace) {
-      assertWorkspaceEnvironment(existingWorkspace, environment);
-    }
+    const availableImageSources = context.imageSources();
+    const existingWorkspace = context.workspace;
 
     switch (input.type) {
       case "apply-source": {
@@ -249,7 +212,7 @@ export async function runBuilderActionAction(
                 availableImageSources,
               });
         repository.bootstrapArticle({
-          article: articleRecord(environment),
+          article: context.articleRecord,
           html: prepared.source,
           hostHtml: prepared.compiledHtml,
           replaceEmptySession: input.method !== "blank",
@@ -272,7 +235,7 @@ export async function runBuilderActionAction(
       );
     }
     await flushHostSync(environment);
-    return builderWorkspace(environment, repository);
+    return context.toWorkspace();
   });
 }
 
@@ -281,11 +244,8 @@ export async function bootstrapBuilderFromFileAction(
   data: FormData,
 ): Promise<ActionResult<BuilderWorkspace>> {
   return result(async () => {
-    const environment = await resolveAuthorizedEnvironment(
-      environmentSchema.parse(reference),
-      "bootstrap",
-    );
-    const website = getWebsiteConfig(environment.website);
+    const context = await createBuilderOperation(reference, "bootstrap");
+    const { environment, website, article, repository, images } = context;
     const file = data.get("file");
     if (!(file instanceof File)) {
       throw new BuilderActionError("A Bootstrap file is required.");
@@ -303,7 +263,6 @@ export async function bootstrapBuilderFromFileAction(
         prepareNewArticleImage(environment.website, image),
       ),
     );
-    const article = getArticleAssetContext(environment);
     const imagePaths = preparedImages.map((image, index) =>
       replaceAssetExtension(
         deriveAssetPath(website.assetPolicy, article, index + 1),
@@ -320,11 +279,6 @@ export async function bootstrapBuilderFromFileAction(
       availableImageSources: new Set(imagePaths),
     });
 
-    const repository = getArticleRepository();
-    const existingWorkspace = repository.getWorkspace(environment.articleId);
-    if (existingWorkspace) {
-      assertWorkspaceEnvironment(existingWorkspace, environment);
-    }
     const storedUploads: Array<{
       name: string;
       mediaType: string;
@@ -357,14 +311,13 @@ export async function bootstrapBuilderFromFileAction(
         });
       }
 
-      const imageRepository = new ArticleImageRepository(repository.sqlite);
       const messageContent =
         kind === "docx"
           ? "Start with this Word document."
           : "Start with this HTML document.";
       const workspace = repository.db.transaction(() => {
         const bootstrapped = repository.bootstrapArticle({
-          article: articleRecord(environment),
+          article: context.articleRecord,
           html: preparedSource.source,
           hostHtml: preparedSource.compiledHtml,
           initialMessage: {
@@ -394,9 +347,9 @@ export async function bootstrapBuilderFromFileAction(
         }
         if (
           preparedImages.length > 0 &&
-          imageRepository.list(environment.articleId).length === 0
+          images.list(environment.articleId).length === 0
         ) {
-          imageRepository.add(
+          images.add(
             environment.articleId,
             preparedImages.map((prepared) => prepared.image),
           );
@@ -420,7 +373,7 @@ export async function bootstrapBuilderFromFileAction(
       throw error;
     }
     await flushHostSync(environment);
-    return builderWorkspace(environment, repository);
+    return context.toWorkspace();
   });
 }
 
@@ -429,33 +382,26 @@ export async function convertArticleImageToJpegAction(
   request: { imageId: string },
 ): Promise<ActionResult<BuilderWorkspace>> {
   return result(async () => {
-    const environment = await resolveAuthorizedEnvironment(
-      environmentSchema.parse(reference),
-      "mutate",
-    );
+    const context = await createBuilderOperation(reference, "mutate");
+    const { environment, repository, images, workspace } = context;
     if (environment.website !== "cmweb") {
       throw new BuilderActionError(
         "PNG-to-JPEG conversion is available only for CMWeb images.",
       );
     }
     const { imageId } = imageMutationSchema.parse(request);
-    const repository = getArticleRepository();
-    const workspace = repository.getWorkspace(environment.articleId);
     if (!workspace) throw new BuilderActionError("The Article is unavailable.");
-    assertWorkspaceEnvironment(workspace, environment);
 
-    const imageRepository = new ArticleImageRepository(repository.sqlite);
-    const image = imageRepository.getBinary(environment.articleId, imageId);
+    const image = images.getBinary(environment.articleId, imageId);
     if (image.mediaType !== "image/png") {
       throw new BuilderActionError("Only PNG images can be converted to JPEG.");
     }
     const productionPrepared = await prepareProductionImage("cmweb", image, {
       convertPngToJpeg: true,
     });
-    const website = getWebsiteConfig(environment.website);
     const basePath = deriveAssetPath(
-      website.assetPolicy,
-      getArticleAssetContext(environment),
+      context.website.assetPolicy,
+      context.article,
       image.position,
     );
     const pngPath = replaceAssetExtension(basePath, "png");
@@ -470,9 +416,7 @@ export async function convertArticleImageToJpegAction(
       pngPath,
       jpegPath,
     );
-    const availableImageSources = new Set(
-      currentArticleImageSources(environment, repository),
-    );
+    const availableImageSources = new Set(context.imageSources());
     availableImageSources.delete(pngPath);
     availableImageSources.add(jpegPath);
     const sourcePrepared = await prepareManagedSourceForSave(nextSource, {
@@ -480,7 +424,7 @@ export async function convertArticleImageToJpegAction(
       previousSource: workspace.currentVersion.html,
     });
     repository.db.transaction(() => {
-      imageRepository.replaceBinary(environment.articleId, imageId, {
+      images.replaceBinary(environment.articleId, imageId, {
         name: image.originalName,
         mediaType: productionPrepared.image.mediaType,
         bytes: productionPrepared.image.bytes,
@@ -492,7 +436,7 @@ export async function convertArticleImageToJpegAction(
       });
     });
     await flushHostSync(environment);
-    return builderWorkspace(environment, repository);
+    return context.toWorkspace();
   });
 }
 
@@ -501,10 +445,8 @@ export async function uploadBuilderArticleImagesAction(
   data: FormData,
 ): Promise<ActionResult<BuilderWorkspace>> {
   return result(async () => {
-    const environment = await resolveAuthorizedEnvironment(
-      environmentSchema.parse(reference),
-      "mutate",
-    );
+    const context = await createBuilderOperation(reference, "mutate");
+    const { environment, images, workspace } = context;
     const files = data
       .getAll("files")
       .filter((value): value is File => value instanceof File);
@@ -513,15 +455,11 @@ export async function uploadBuilderArticleImagesAction(
     }
     assertValidArticleImageUploads(files);
 
-    const repository = getArticleRepository();
-    const workspace = repository.getWorkspace(environment.articleId);
     if (!workspace) {
       throw new BuilderActionError(
         "Bootstrap the Builder Chat before adding Article Images.",
       );
     }
-    assertWorkspaceEnvironment(workspace, environment);
-
     const prepared = await Promise.all(
       files.map(async (file) =>
         prepareNewArticleImage(environment.website, {
@@ -531,11 +469,11 @@ export async function uploadBuilderArticleImagesAction(
         }),
       ),
     );
-    new ArticleImageRepository(repository.sqlite).add(
+    images.add(
       environment.articleId,
       prepared.map((item) => item.image),
     );
-    return builderWorkspace(environment, repository);
+    return context.toWorkspace();
   });
 }
 
@@ -544,20 +482,12 @@ export async function reorderBuilderArticleImagesAction(
   request: { orderedImageIds: string[] },
 ): Promise<ActionResult<BuilderWorkspace>> {
   return result(async () => {
-    const environment = await resolveAuthorizedEnvironment(
-      environmentSchema.parse(reference),
-      "mutate",
-    );
+    const context = await createBuilderOperation(reference, "mutate");
+    const { environment, images, workspace } = context;
     const { orderedImageIds } = imageOrderSchema.parse(request);
-    const repository = getArticleRepository();
-    const workspace = repository.getWorkspace(environment.articleId);
     if (!workspace) throw new BuilderActionError("The Article is unavailable.");
-    assertWorkspaceEnvironment(workspace, environment);
-    new ArticleImageRepository(repository.sqlite).reorder(
-      environment.articleId,
-      orderedImageIds,
-    );
-    return builderWorkspace(environment, repository);
+    images.reorder(environment.articleId, orderedImageIds);
+    return context.toWorkspace();
   });
 }
 
@@ -566,20 +496,12 @@ export async function removeBuilderArticleImageAction(
   request: { imageId: string },
 ): Promise<ActionResult<BuilderWorkspace>> {
   return result(async () => {
-    const environment = await resolveAuthorizedEnvironment(
-      environmentSchema.parse(reference),
-      "mutate",
-    );
+    const context = await createBuilderOperation(reference, "mutate");
+    const { environment, images, workspace } = context;
     const { imageId } = imageMutationSchema.parse(request);
-    const repository = getArticleRepository();
-    const workspace = repository.getWorkspace(environment.articleId);
     if (!workspace) throw new BuilderActionError("The Article is unavailable.");
-    assertWorkspaceEnvironment(workspace, environment);
-    new ArticleImageRepository(repository.sqlite).remove(
-      environment.articleId,
-      imageId,
-    );
-    return builderWorkspace(environment, repository);
+    images.remove(environment.articleId, imageId);
+    return context.toWorkspace();
   });
 }
 
@@ -588,10 +510,8 @@ export async function uploadBuilderReferencesAction(
   data: FormData,
 ): Promise<ActionResult<BuilderWorkspace>> {
   return result(async () => {
-    const environment = await resolveAuthorizedEnvironment(
-      environmentSchema.parse(reference),
-      "upload",
-    );
+    const context = await createBuilderOperation(reference, "upload");
+    const { environment, repository } = context;
     const files = data
       .getAll("files")
       .filter((value): value is File => value instanceof File);
@@ -600,14 +520,12 @@ export async function uploadBuilderReferencesAction(
     }
     assertValidReferenceUploads(files);
 
-    const repository = getArticleRepository();
-    const currentWorkspace = repository.getWorkspace(environment.articleId);
+    const currentWorkspace = context.workspace;
     if (!currentWorkspace) {
       throw new BuilderActionError(
         "Bootstrap the Builder Chat before adding Reference Uploads.",
       );
     }
-    assertWorkspaceEnvironment(currentWorkspace, environment);
     const existingBytes = currentWorkspace.uploads.reduce(
       (total, upload) => total + upload.sizeBytes,
       0,
@@ -637,7 +555,7 @@ export async function uploadBuilderReferencesAction(
       }
     }
 
-    return builderWorkspace(environment, repository);
+    return context.toWorkspace();
   });
 }
 
@@ -646,18 +564,12 @@ export async function getBuilderUploadPreviewAction(
   request: { uploadId: string; index: number },
 ): Promise<ActionResult<ReferenceUploadPreview>> {
   return result(async () => {
-    const environment = await resolveAuthorizedEnvironment(
-      environmentSchema.parse(reference),
-      "read",
-    );
+    const context = await createBuilderOperation(reference, "read");
     const input = uploadPreviewSchema.parse(request);
-    const workspace = getArticleRepository().getWorkspace(
-      environment.articleId,
-    );
+    const workspace = context.workspace;
     if (!workspace) {
       throw new BuilderActionError("The attachment is unavailable.");
     }
-    assertWorkspaceEnvironment(workspace, environment);
     const upload = workspace.uploads.find(
       (candidate) => candidate.id === input.uploadId,
     );
@@ -675,8 +587,8 @@ export async function getBuilderUploadPreviewAction(
     const expectedAssetPath =
       kind === "image"
         ? deriveAssetPath(
-            getWebsiteConfig(environment.website).assetPolicy,
-            getArticleAssetContext(environment),
+            context.website.assetPolicy,
+            context.article,
             input.index,
           )
         : undefined;
@@ -721,27 +633,6 @@ async function result<T>(
   }
 }
 
-function currentArticleImageSources(
-  environment: BuilderEnvironment,
-  repository: ReturnType<typeof getArticleRepository>,
-): ReadonlySet<string> {
-  return builderArticleImageSources(
-    environment,
-    new ArticleImageRepository(repository.sqlite).list(environment.articleId),
-  );
-}
-
-function builderWorkspace(
-  environment: BuilderEnvironment,
-  repository: ReturnType<typeof getArticleRepository>,
-  workspace = repository.getWorkspace(environment.articleId),
-): BuilderWorkspace {
-  const images = workspace
-    ? new ArticleImageRepository(repository.sqlite).list(environment.articleId)
-    : [];
-  return toBuilderWorkspace(environment, workspace, images);
-}
-
 function actionErrorMessage(error: unknown): string {
   if (error instanceof z.ZodError) {
     return error.issues[0]?.message ?? "Invalid Builder request.";
@@ -758,16 +649,6 @@ class BuilderActionError extends Error {
     super(message);
     this.name = "BuilderActionError";
   }
-}
-
-function articleRecord(environment: BuilderEnvironment) {
-  const website = getWebsiteConfig(environment.website);
-  return {
-    id: environment.articleId,
-    website: website.storageWebsite,
-    articleType: website.storageArticleType,
-    title: environment.articleTitle,
-  };
 }
 
 async function extractReferenceText(
@@ -798,10 +679,6 @@ async function extractReferenceText(
     : `${extracted.slice(0, limit)}\n\n[Reference extract truncated at ${limit} characters.]`;
 }
 
-function isModelImage(name: string): boolean {
-  return MODEL_IMAGE_EXTENSIONS.has(fileExtension(name));
-}
-
 const TEXT_EXTENSIONS = new Set([
   ".html",
   ".htm",
@@ -810,12 +687,4 @@ const TEXT_EXTENSIONS = new Set([
   ".css",
   ".js",
   ".svg",
-]);
-
-const MODEL_IMAGE_EXTENSIONS = new Set([
-  ".png",
-  ".jpg",
-  ".jpeg",
-  ".webp",
-  ".gif",
 ]);

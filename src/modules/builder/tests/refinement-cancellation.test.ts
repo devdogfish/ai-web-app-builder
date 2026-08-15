@@ -9,7 +9,12 @@ import {
 } from "vitest";
 
 import { createArticleModelFromEnv } from "../ai/server";
-import { ArticleModelError } from "../ai/types";
+import {
+  ArticleModelError,
+  type ArticleModel,
+  type ArticleModelEvent,
+  type ArticleModelResult,
+} from "../ai/types";
 import { ArticleImageRepository } from "../../article-images/repository";
 import { createArticleRepository, type ArticleWorkspace } from "../db";
 import type { BuilderEnvironment } from "../environment/types";
@@ -98,6 +103,18 @@ beforeAll(async () => {
   ({ runBuilderRefinement } = await import("../server/refinement"));
 });
 
+function mockArticleModel(stream: ArticleModel["stream"]) {
+  vi.mocked(createArticleModelFromEnv).mockReturnValue({
+    provider: "openrouter",
+    model: "test",
+    stream,
+  });
+}
+
+function finish(result: ArticleModelResult): ArticleModelEvent {
+  return { type: "finish", result };
+}
+
 describe("Builder refinement cancellation", () => {
   let repository: ReturnType<typeof createArticleRepository>;
 
@@ -121,18 +138,14 @@ describe("Builder refinement cancellation", () => {
     const controller = new AbortController();
     let markStarted!: () => void;
     const started = new Promise<void>((resolve) => (markStarted = resolve));
-    vi.mocked(createArticleModelFromEnv).mockReturnValue({
-      provider: "openrouter",
-      model: "test",
-      async *stream(_request, options) {
-        markStarted();
-        await new Promise<never>((_resolve, reject) => {
-          const stop = () =>
-            reject(new ArticleModelError("cancelled", "cancelled"));
-          if (options?.signal?.aborted) stop();
-          else options?.signal?.addEventListener("abort", stop, { once: true });
-        });
-      },
+    mockArticleModel(async function* (_request, options) {
+      markStarted();
+      await new Promise<never>((_resolve, reject) => {
+        const stop = () =>
+          reject(new ArticleModelError("cancelled", "cancelled"));
+        if (options?.signal?.aborted) stop();
+        else options?.signal?.addEventListener("abort", stop, { once: true });
+      });
     });
 
     const pending = runBuilderRefinement(
@@ -165,21 +178,14 @@ describe("Builder refinement cancellation", () => {
 
   it("does not commit output when cancellation wins before persistence", async () => {
     const controller = new AbortController();
-    vi.mocked(createArticleModelFromEnv).mockReturnValue({
-      provider: "openrouter",
-      model: "test",
-      async *stream() {
-        controller.abort();
-        yield {
-          type: "finish",
-          result: {
-            action: "edit",
-            response: "Updated",
-            summary: "Update article",
-            articleHtml: "<article><p>After</p></article>",
-          },
-        } as const;
-      },
+    mockArticleModel(async function* () {
+      controller.abort();
+      yield finish({
+        action: "edit",
+        response: "Updated",
+        summary: "Update article",
+        articleHtml: "<article><p>After</p></article>",
+      });
     });
 
     const workspace = await runBuilderRefinement(
@@ -197,29 +203,19 @@ describe("Builder refinement cancellation", () => {
       componentIndex?: string;
       componentSpecs?: readonly string[];
     }> = [];
-    vi.mocked(createArticleModelFromEnv).mockReturnValue({
-      provider: "openrouter",
-      model: "test",
-      async *stream(request) {
-        requests.push(request);
-        if (requests.length === 1) {
-          yield {
-            type: "finish",
-            result: {
-              action: "load_components",
-              tags: ["ImageCarousel"],
-            },
-          } as const;
-          return;
-        }
-        yield {
-          type: "finish",
-          result: {
-            action: "answer",
-            response: "The Component spec is loaded.",
-          },
-        } as const;
-      },
+    mockArticleModel(async function* (request) {
+      requests.push(request);
+      if (requests.length === 1) {
+        yield finish({
+          action: "load_components",
+          tags: ["ImageCarousel"],
+        });
+        return;
+      }
+      yield finish({
+        action: "answer",
+        response: "The Component spec is loaded.",
+      });
     });
 
     const workspace = await runBuilderRefinement(environment, {
@@ -256,24 +252,17 @@ describe("Builder refinement cancellation", () => {
         bytes: new Uint8Array([1]),
       },
     ]);
-    vi.mocked(createArticleModelFromEnv).mockReturnValue({
-      provider: "openrouter",
-      model: "test",
-      async *stream(request) {
-        prompts.push(request.currentPrompt);
-        yield {
-          type: "finish",
-          result: {
-            action: "edit",
-            response: "Converted the quote.",
-            summary: "Convert quote",
-            articleHtml:
-              prompts.length === 1
-                ? '<article><Component id="attributed-quote" data={ quote: html`<p>Quote</p>`, author: "Source", image: "/media/articles/article-title-1.webp", imageAlt: "Source" } /></article>'
-                : '<article><p><Component id="attributed-quote" data={{ quote: html`<p>Quote</p>`, author: "Source", image: "/media/articles/article-title-1.webp", imageAlt: "Source" }} /></p></article>',
-          },
-        } as const;
-      },
+    mockArticleModel(async function* (request) {
+      prompts.push(request.currentPrompt);
+      yield finish({
+        action: "edit",
+        response: "Converted the quote.",
+        summary: "Convert quote",
+        articleHtml:
+          prompts.length === 1
+            ? '<article><Component id="attributed-quote" data={ quote: html`<p>Quote</p>`, author: "Source", image: "/media/articles/article-title-1.webp", imageAlt: "Source" } /></article>'
+            : '<article><p><Component id="attributed-quote" data={{ quote: html`<p>Quote</p>`, author: "Source", image: "/media/articles/article-title-1.webp", imageAlt: "Source" }} /></p></article>',
+      });
     });
 
     const workspace = await runBuilderRefinement(environment, {
@@ -303,20 +292,13 @@ describe("Builder refinement cancellation", () => {
         bytes: new Uint8Array([1, 2, 3]),
       },
     ]);
-    vi.mocked(createArticleModelFromEnv).mockReturnValue({
-      provider: "openrouter",
-      model: "test",
-      async *stream() {
-        yield {
-          type: "finish",
-          result: {
-            action: "edit",
-            response: "Updated copy.",
-            summary: "Update copy",
-            articleHtml: "<article><p>After</p></article>",
-          },
-        } as const;
-      },
+    mockArticleModel(async function* () {
+      yield finish({
+        action: "edit",
+        response: "Updated copy.",
+        summary: "Update copy",
+        articleHtml: "<article><p>After</p></article>",
+      });
     });
 
     const workspace = await runBuilderRefinement(environment, {

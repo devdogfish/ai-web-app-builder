@@ -35,6 +35,9 @@ import {
 } from "../core/version-summary";
 
 export type ArticleRepositoryDatabase = BetterSQLite3Database<typeof schema>;
+type ArticleTransaction = Parameters<
+  Parameters<ArticleRepositoryDatabase["transaction"]>[0]
+>[0];
 
 export interface ArticleWorkspace {
   article: Article;
@@ -171,7 +174,10 @@ function digest(html: string): string {
   return createHash("sha256").update(html).digest("hex");
 }
 
-function hostSnapshot(source: string, compiledHtml: string | undefined): string {
+function hostSnapshot(
+  source: string,
+  compiledHtml: string | undefined,
+): string {
   if (compiledHtml !== undefined) return compiledHtml;
   if (source.includes("<Component")) {
     throw new ArticleRepositoryError(
@@ -431,12 +437,7 @@ export class ArticleRepository {
     const messageId = this.createId();
 
     return this.db.transaction((tx) => {
-      const chat = tx
-        .select()
-        .from(builderChats)
-        .where(eq(builderChats.articleId, input.articleId))
-        .get();
-      if (!chat) this.throwChatNotFound(input.articleId);
+      const chat = this.requireChat(tx, input.articleId);
       this.assertUploadsAttachable(tx, chat.id, input.uploadIds ?? []);
 
       const message = tx
@@ -520,38 +521,18 @@ export class ArticleRepository {
     const timestamp = this.now();
 
     return this.db.transaction((tx) => {
-      const chat = tx
-        .select()
-        .from(builderChats)
-        .where(eq(builderChats.articleId, input.articleId))
-        .get();
-      if (!chat) this.throwChatNotFound(input.articleId);
-      const currentVersion = tx
-        .select({ sha256: versions.sha256 })
-        .from(versions)
-        .where(
-          and(
-            eq(versions.id, chat.currentVersionId ?? ""),
-            eq(versions.chatId, chat.id),
-          ),
-        )
-        .get();
-      if (!currentVersion) {
-        throw new ArticleRepositoryError(
-          "version_not_found",
-          `Current version for article ${input.articleId} does not exist`,
-        );
-      }
-      if (
-        chat.id !== input.expectedChatId ||
-        chat.currentVersionId !== input.expectedVersionId ||
-        currentVersion.sha256 !== input.expectedVersionSha256
-      ) {
-        throw new ArticleRepositoryError(
-          "stale_version",
-          "Article HTML changed while the refinement was running.",
-        );
-      }
+      const chat = this.requireChat(tx, input.articleId);
+      const currentVersion = this.requireCurrentVersion(
+        tx,
+        chat,
+        input.articleId,
+      );
+      this.assertExpectedVersion(
+        chat,
+        currentVersion,
+        input,
+        "Article HTML changed while the refinement was running.",
+      );
 
       this.assertUploadsAttachable(tx, chat.id, input.uploadIds ?? []);
       const message = tx
@@ -590,38 +571,18 @@ export class ArticleRepository {
     const timestamp = this.now();
 
     return this.db.transaction((tx) => {
-      const chat = tx
-        .select()
-        .from(builderChats)
-        .where(eq(builderChats.articleId, input.articleId))
-        .get();
-      if (!chat) this.throwChatNotFound(input.articleId);
-      const currentVersion = tx
-        .select({ sha256: versions.sha256 })
-        .from(versions)
-        .where(
-          and(
-            eq(versions.id, chat.currentVersionId ?? ""),
-            eq(versions.chatId, chat.id),
-          ),
-        )
-        .get();
-      if (!currentVersion) {
-        throw new ArticleRepositoryError(
-          "version_not_found",
-          `Current version for article ${input.articleId} does not exist`,
-        );
-      }
-      if (
-        chat.id !== input.expectedChatId ||
-        chat.currentVersionId !== input.expectedVersionId ||
-        currentVersion.sha256 !== input.expectedVersionSha256
-      ) {
-        throw new ArticleRepositoryError(
-          "stale_version",
-          "Article HTML changed while the answer was being prepared.",
-        );
-      }
+      const chat = this.requireChat(tx, input.articleId);
+      const currentVersion = this.requireCurrentVersion(
+        tx,
+        chat,
+        input.articleId,
+      );
+      this.assertExpectedVersion(
+        chat,
+        currentVersion,
+        input,
+        "Article HTML changed while the answer was being prepared.",
+      );
 
       const message = tx
         .insert(messages)
@@ -650,29 +611,12 @@ export class ArticleRepository {
     const timestamp = this.now();
 
     return this.db.transaction((tx) => {
-      const chat = tx
-        .select()
-        .from(builderChats)
-        .where(eq(builderChats.articleId, input.articleId))
-        .get();
-      if (!chat) this.throwChatNotFound(input.articleId);
-
-      const currentVersion = tx
-        .select()
-        .from(versions)
-        .where(
-          and(
-            eq(versions.id, chat.currentVersionId ?? ""),
-            eq(versions.chatId, chat.id),
-          ),
-        )
-        .get();
-      if (!currentVersion) {
-        throw new ArticleRepositoryError(
-          "version_not_found",
-          `Current version for article ${input.articleId} does not exist`,
-        );
-      }
+      const chat = this.requireChat(tx, input.articleId);
+      const currentVersion = this.requireCurrentVersion(
+        tx,
+        chat,
+        input.articleId,
+      );
 
       const hostHtml = hostSnapshot(input.html, input.hostHtml);
       const hostSha256 = digest(hostHtml);
@@ -742,12 +686,7 @@ export class ArticleRepository {
     const timestamp = this.now();
 
     return this.db.transaction((tx) => {
-      const chat = tx
-        .select()
-        .from(builderChats)
-        .where(eq(builderChats.articleId, input.articleId))
-        .get();
-      if (!chat) this.throwChatNotFound(input.articleId);
+      const chat = this.requireChat(tx, input.articleId);
 
       const target = tx
         .select()
@@ -945,8 +884,62 @@ export class ArticleRepository {
     );
   }
 
+  private requireChat(tx: ArticleTransaction, articleId: string): BuilderChat {
+    const chat = tx
+      .select()
+      .from(builderChats)
+      .where(eq(builderChats.articleId, articleId))
+      .get();
+    if (!chat) this.throwChatNotFound(articleId);
+    return chat;
+  }
+
+  private requireCurrentVersion(
+    tx: ArticleTransaction,
+    chat: BuilderChat,
+    articleId: string,
+  ): ArticleVersion {
+    const version = tx
+      .select()
+      .from(versions)
+      .where(
+        and(
+          eq(versions.id, chat.currentVersionId ?? ""),
+          eq(versions.chatId, chat.id),
+        ),
+      )
+      .get();
+    if (!version) {
+      throw new ArticleRepositoryError(
+        "version_not_found",
+        `Current version for article ${articleId} does not exist`,
+      );
+    }
+    return version;
+  }
+
+  private assertExpectedVersion(
+    chat: BuilderChat,
+    version: ArticleVersion,
+    expected: {
+      expectedChatId: string;
+      expectedVersionId: string;
+      expectedVersionSha256: string;
+    },
+    message: string,
+  ): void {
+    if (
+      chat.id === expected.expectedChatId &&
+      chat.currentVersionId === expected.expectedVersionId &&
+      version.sha256 === expected.expectedVersionSha256
+    ) {
+      return;
+    }
+    throw new ArticleRepositoryError("stale_version", message);
+  }
+
   private assertUploadsAttachable(
-    tx: Parameters<Parameters<ArticleRepositoryDatabase["transaction"]>[0]>[0],
+    tx: ArticleTransaction,
     chatId: string,
     uploadIds: string[],
   ): void {
@@ -973,7 +966,7 @@ export class ArticleRepository {
   }
 
   private attachUploads(
-    tx: Parameters<Parameters<ArticleRepositoryDatabase["transaction"]>[0]>[0],
+    tx: ArticleTransaction,
     chatId: string,
     messageId: string,
     uploadIds: string[],
@@ -988,7 +981,7 @@ export class ArticleRepository {
   }
 
   private insertNextVersion(
-    tx: Parameters<Parameters<ArticleRepositoryDatabase["transaction"]>[0]>[0],
+    tx: ArticleTransaction,
     input: {
       articleId: string;
       chat: BuilderChat;

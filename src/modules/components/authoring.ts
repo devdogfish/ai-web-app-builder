@@ -10,6 +10,7 @@ import type {
 } from "./contracts";
 import { ComponentValidationError } from "./contracts";
 import { componentTagFromName } from "./identity";
+import { mergeComponentData } from "./merge-data";
 import {
   assertValidComponentData,
   assertValidComponentSchema,
@@ -74,11 +75,11 @@ export function prepareComponentDefinition(
   const uiHints = deriveUiHints(schema);
   const generatedDefaults = generatedValue(schema, false) as ComponentData;
   const explicitDefaults = extractParameterDefaults(parameter, file);
-  const defaultData = deepMerge(
+  const defaultData = mergeComponentData(
     generatedDefaults,
     explicitDefaults,
   ) as ComponentData;
-  const sampleData = deepMerge(
+  const sampleData = mergeComponentData(
     generatedValue(schema, true),
     explicitDefaults,
   ) as ComponentData;
@@ -603,26 +604,4 @@ function singular(value: string): string {
   if (/ies$/i.test(value)) return value.replace(/ies$/i, "y");
   if (/s$/i.test(value) && !/ss$/i.test(value)) return value.slice(0, -1);
   return "Item";
-}
-
-function deepMerge(defaults: unknown, provided: unknown): unknown {
-  if (
-    defaults &&
-    provided &&
-    typeof defaults === "object" &&
-    typeof provided === "object" &&
-    !Array.isArray(defaults) &&
-    !Array.isArray(provided)
-  ) {
-    const result: Record<string, unknown> = {
-      ...(defaults as Record<string, unknown>),
-    };
-    for (const [key, value] of Object.entries(
-      provided as Record<string, unknown>,
-    )) {
-      result[key] = deepMerge(result[key], value);
-    }
-    return result;
-  }
-  return provided;
 }

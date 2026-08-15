@@ -88,16 +88,20 @@ export function ArticleImageManagerDialog({
   const selected = selectedId ? (imagesById.get(selectedId) ?? null) : null;
   const needsUploadCount = images.filter((image) => image.needsUpload).length;
 
+  async function run<T>(action: () => Promise<T>): Promise<T> {
+    setWorking(true);
+    try {
+      return await action();
+    } finally {
+      setWorking(false);
+    }
+  }
+
   async function addSelected(event: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.currentTarget.files ?? []);
     event.currentTarget.value = "";
     if (files.length === 0) return;
-    setWorking(true);
-    try {
-      await onAdd(files);
-    } finally {
-      setWorking(false);
-    }
+    await run(() => onAdd(files));
   }
 
   function moveDraggedOver(targetId: string) {
@@ -115,12 +119,7 @@ export function ArticleImageManagerDialog({
 
   async function commitOrder(nextIds: string[]) {
     setDraftIds(nextIds);
-    setWorking(true);
-    try {
-      if (!(await onReorder(nextIds))) setDraftIds(orderedIds);
-    } finally {
-      setWorking(false);
-    }
+    if (!(await run(() => onReorder(nextIds)))) setDraftIds(orderedIds);
   }
 
   function moveImage(imageId: string, delta: -1 | 1) {
@@ -133,22 +132,12 @@ export function ArticleImageManagerDialog({
 
   async function removeSelected() {
     if (!selected) return;
-    setWorking(true);
-    try {
-      if (await onRemove(selected.id)) setConfirmRemove(false);
-    } finally {
-      setWorking(false);
-    }
+    if (await run(() => onRemove(selected.id))) setConfirmRemove(false);
   }
 
   async function convertSelected() {
     if (!selected) return;
-    setWorking(true);
-    try {
-      await onConvertToJpeg(selected.id);
-    } finally {
-      setWorking(false);
-    }
+    await run(() => onConvertToJpeg(selected.id));
   }
 
   return (

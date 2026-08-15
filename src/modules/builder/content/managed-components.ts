@@ -5,7 +5,7 @@ import {
 } from "../../components/compiler";
 import { formatArticleSource } from "../../components/format";
 import { unavailableComponentImageValues } from "../../components/image-fields";
-import { mergeComponentData } from "../../components/sandbox";
+import { mergeComponentData } from "../../components/merge-data";
 import {
   parseArticleSource as parseManagedReferences,
   unwrapComponentSourceData,

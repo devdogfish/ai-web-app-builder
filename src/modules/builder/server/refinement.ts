@@ -39,10 +39,13 @@ import {
   buildModelUploadText,
   docxVisualContextNote,
   fileExtension,
+  isModelImage,
+  modelImageMediaType,
 } from "../uploads";
 import { renderDocxPagesForModel } from "../uploads/render-docx-pages";
 import { getUploadStore } from "../uploads/storage";
 import { builderErrorDetails } from "./errors";
+import { environmentSchema } from "./operation";
 import { getArticleRefinementCoordinator } from "./refinement-lock";
 import {
   builderComponentModelContext,
@@ -52,12 +55,7 @@ import {
 
 const refinementRequestSchema = z
   .object({
-    environment: z.object({
-      articleId: z.string().trim().min(1).max(256),
-      articleTitle: z.string().trim().min(1).max(500),
-      articleSlug: z.string().trim().min(1).max(500),
-      website: z.enum(["rbccm", "cmweb"]),
-    }),
+    environment: environmentSchema,
     prompt: z.string().trim().max(20_000),
     uploadIds: z.array(z.string().trim().min(1).max(256)).max(10),
     runtimeError: z.string().max(10_000).optional(),
@@ -155,7 +153,7 @@ export async function runBuilderRefinement(
               : uploadText,
             dataUrl:
               stored && image
-                ? `data:${imageMediaType(upload.name)};base64,${Buffer.from(stored.bytes).toString("base64")}`
+                ? `data:${modelImageMediaType(upload.name)};base64,${Buffer.from(stored.bytes).toString("base64")}`
                 : undefined,
             dataUrls: docx ? docxPages : undefined,
           };
@@ -477,16 +475,6 @@ function throwIfCancelled(signal?: AbortSignal): void {
   throw new ArticleModelError("cancelled", "Generation stopped.");
 }
 
-function isModelImage(name: string): boolean {
-  return MODEL_IMAGE_EXTENSIONS.has(fileExtension(name));
-}
-
-function imageMediaType(name: string): string {
-  const extension = fileExtension(name);
-  if (extension === ".jpg" || extension === ".jpeg") return "image/jpeg";
-  return `image/${extension.slice(1)}`;
-}
-
 function isRetryableUpload(
   workspace: ArticleWorkspace,
   messageId: string,
@@ -504,14 +492,6 @@ function isRetryableUpload(
     .findLast((message) => message.role === "user");
   return precedingUser?.id === messageId;
 }
-
-const MODEL_IMAGE_EXTENSIONS = new Set([
-  ".png",
-  ".jpg",
-  ".jpeg",
-  ".webp",
-  ".gif",
-]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;

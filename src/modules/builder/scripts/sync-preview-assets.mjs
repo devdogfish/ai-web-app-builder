@@ -189,7 +189,6 @@ async function main() {
   };
   await mkdir(dirname(MANIFEST_PATH), { recursive: true });
   await writeFile(MANIFEST_PATH, `${JSON.stringify(manifest, null, 2)}\n`);
-  await writeFile(join(PUBLIC_ROOT, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 
   const imageDownloads = manifest.downloaded.filter((path) =>
     IMAGE_EXTENSIONS.has(extname(new URL(path, "https://preview.invalid").pathname).toLowerCase()),

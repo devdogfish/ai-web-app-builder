@@ -37,9 +37,7 @@ export function BuilderEnvironmentProvider({
       value={{
         environment: currentEnvironment,
         setWebsite: (website) =>
-          setEnvironment((current) =>
-            switchDevelopmentWebsite(current, website),
-          ),
+          setEnvironment(switchDevelopmentWebsite(website)),
       }}
     >
       {children}

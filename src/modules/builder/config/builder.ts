@@ -53,13 +53,8 @@ const document = Object.freeze({
 });
 
 const preview = Object.freeze({
-  desktopWidth: 1280,
   sandboxTokens: ["allow-scripts"] as const,
   referrerPolicy: "no-referrer" as const,
-  allowRemoteScripts: false,
-  allowForms: false,
-  allowPopups: false,
-  allowTopNavigation: false,
 });
 
 /** Single UI/server source for all product-level limits and security toggles. */
@@ -73,4 +68,3 @@ export const BUILDER_LIMITS = Object.freeze({
 export const BUILDER_UPLOAD_LIMITS = BUILDER_LIMITS.uploads;
 export const BUILDER_CONTEXT_LIMITS = BUILDER_LIMITS.context;
 export const BUILDER_DOCUMENT_LIMITS = BUILDER_LIMITS.document;
-export const BUILDER_PREVIEW_CONFIG = BUILDER_LIMITS.preview;

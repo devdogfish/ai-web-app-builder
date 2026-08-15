@@ -3,12 +3,18 @@ import { describe, expect, it } from "vitest";
 import {
   buildModelUploadText,
   docxVisualContextNote,
+  isModelImage,
   serializeModelUpload,
 } from "../uploads/model-content";
 import { formatHtmlSource } from "../content/format-html";
 import { formatModelPayload } from "../uploads/format-model-payload";
 
 describe("model upload content", () => {
+  it("classifies normalized image filenames", () => {
+    expect(isModelImage("hero.PNG ")).toBe(true);
+    expect(isModelImage("hero.svg")).toBe(false);
+  });
+
   it("states explicitly when DOCX visual rendering is unavailable", () => {
     expect(docxVisualContextNote(0)).toContain(
       "use the structural extract only",

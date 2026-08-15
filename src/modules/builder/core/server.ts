@@ -24,6 +24,7 @@ import {
   getWebsiteConfig,
 } from "@/modules/builder/environment/websites";
 import { articleImagePreviewUrl } from "./article-image-preview-url";
+import { isModelImage } from "../uploads";
 
 export { assertWorkspaceEnvironment } from "@/modules/builder/environment/ownership";
 
@@ -170,8 +171,4 @@ export function builderArticleImageSources(
       builderArticleImageProductionPath(environment, image),
     ),
   );
-}
-
-function isModelImage(name: string): boolean {
-  return /\.(?:png|jpe?g|webp|gif)$/i.test(name);
 }

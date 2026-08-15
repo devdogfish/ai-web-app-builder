@@ -1,7 +1,20 @@
+import { fileExtension } from "./validate";
+
 export interface ModelUploadSource {
   name: string;
   mediaType: string;
   extractedText: string | null;
+}
+
+export function isModelImage(name: string): boolean {
+  return /^\.(?:png|jpe?g|webp|gif)$/.test(fileExtension(name));
+}
+
+export function modelImageMediaType(name: string): string {
+  const extension = fileExtension(name);
+  return extension === ".jpg" || extension === ".jpeg"
+    ? "image/jpeg"
+    : `image/${extension.slice(1)}`;
 }
 
 export function buildModelUploadText(

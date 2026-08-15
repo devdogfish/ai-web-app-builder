@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 import Database from "better-sqlite3";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,15 +12,38 @@ import { initializeDatabase } from "../db/initialize";
 function createTestRepository() {
   let id = 0;
   let time = 1_700_000_000_000;
-  return createArticleRepository({
+  const repository = createArticleRepository({
     filename: ":memory:",
     createId: () => `id-${++id}`,
     now: () => new Date(++time),
   });
+  onTestFinished(() => repository.close());
+  return repository;
+}
+
+type TestRepository = ReturnType<typeof createTestRepository>;
+type BootstrapInput = Parameters<TestRepository["bootstrapArticle"]>[0];
+
+function bootstrapTestArticle(
+  repository: TestRepository,
+  input: Omit<BootstrapInput, "article"> & {
+    article?: Partial<BootstrapInput["article"]>;
+  } = {},
+) {
+  const { article, ...workspace } = input;
+  return repository.bootstrapArticle({
+    article: {
+      id: "article-1",
+      website: "news",
+      articleType: "story",
+      ...article,
+    },
+    ...workspace,
+  });
 }
 
 function commitAssistant(
-  repository: ReturnType<typeof createTestRepository>,
+  repository: TestRepository,
   html: string,
   summary = "Assistant update",
 ) {
@@ -40,8 +63,7 @@ function commitAssistant(
 describe("ArticleRepository", () => {
   it("stores Article Source in versions and compiled HTML in the host outbox", () => {
     const repository = createTestRepository();
-    const baseline = repository.bootstrapArticle({
-      article: { id: "article-1", website: "news", articleType: "story" },
+    const baseline = bootstrapTestArticle(repository, {
       html: "<p>Before</p>",
       hostHtml: "<p>Before</p>",
     });
@@ -64,16 +86,13 @@ describe("ArticleRepository", () => {
     expect(task?.sha256).toBe(hash(compiled));
     expect(task?.expectedPreviousSha256).toBe(baselineTask?.sha256);
     expect(workspace?.currentVersion.id).toBe(baseline.currentVersion.id);
-
-    repository.close();
   });
 
   it("queues a fresh compiled handoff when the managed source is unchanged", () => {
     const repository = createTestRepository();
     const source = '<Component type="tabs" data={{ tabs: [] }} />';
     const firstCompiled = '<section class="tabs old"></section>';
-    const workspace = repository.bootstrapArticle({
-      article: { id: "article-1", website: "news", articleType: "story" },
+    const workspace = bootstrapTestArticle(repository, {
       html: source,
       hostHtml: firstCompiled,
     });
@@ -96,7 +115,6 @@ describe("ArticleRepository", () => {
         expectedPreviousSha256: hash(firstCompiled),
       }),
     ]);
-    repository.close();
   });
 
   it("creates the current messages schema through Drizzle migrations", () => {
@@ -123,13 +141,8 @@ describe("ArticleRepository", () => {
   it("bootstraps one active chat and one full baseline snapshot", () => {
     const repository = createTestRepository();
 
-    const workspace = repository.bootstrapArticle({
-      article: {
-        id: "article-1",
-        website: "news",
-        articleType: "story",
-        title: "A title",
-      },
+    const workspace = bootstrapTestArticle(repository, {
+      article: { title: "A title" },
       html: "<p>Existing article</p>",
     });
 
@@ -150,28 +163,20 @@ describe("ArticleRepository", () => {
     repository.completeHostSync(sync.versionId);
     expect(repository.getWorkspace("article-1")?.hostSyncPending).toBe(false);
     expect(
-      repository.bootstrapArticle({
+      bootstrapTestArticle(repository, {
         article: {
-          id: "article-1",
           website: "other",
           articleType: "other",
         },
         html: "must not replace an existing workspace",
       }).chat.id,
     ).toBe(workspace.chat.id);
-
-    repository.close();
   });
 
   it("attaches an initial document and its extracted images to the first user message", () => {
     const repository = createTestRepository();
 
-    const workspace = repository.bootstrapArticle({
-      article: {
-        id: "article-1",
-        website: "news",
-        articleType: "story",
-      },
+    const workspace = bootstrapTestArticle(repository, {
       html: "<p>Imported article</p>",
       initialMessage: {
         content: "Start with this Word document.",
@@ -223,8 +228,6 @@ describe("ArticleRepository", () => {
       ]),
     );
     expect(workspace.currentVersion.html).toBe("<p>Imported article</p>");
-
-    repository.close();
   });
 
   it("preserves bootstrap provenance when the workspace is reopened", () => {
@@ -234,12 +237,7 @@ describe("ArticleRepository", () => {
 
     try {
       repository = createArticleRepository({ filename });
-      repository.bootstrapArticle({
-        article: {
-          id: "article-1",
-          website: "news",
-          articleType: "story",
-        },
+      bootstrapTestArticle(repository, {
         html: "<p>Imported article</p>",
         initialMessage: {
           content: "Start with this Word document.",
@@ -284,21 +282,11 @@ describe("ArticleRepository", () => {
 
   it("replaces a concurrently-created empty bootstrap with the source document", () => {
     const repository = createTestRepository();
-    const racedWorkspace = repository.bootstrapArticle({
-      article: {
-        id: "article-1",
-        website: "news",
-        articleType: "story",
-      },
+    const racedWorkspace = bootstrapTestArticle(repository, {
       html: "<p>Host bootstrap won the race</p>",
     });
 
-    const workspace = repository.bootstrapArticle({
-      article: {
-        id: "article-1",
-        website: "news",
-        articleType: "story",
-      },
+    const workspace = bootstrapTestArticle(repository, {
       html: "<p>Imported Word document</p>",
       initialMessage: {
         content: "",
@@ -314,7 +302,7 @@ describe("ArticleRepository", () => {
         ],
       },
       replaceEmptySession: true,
-    } as Parameters<typeof repository.bootstrapArticle>[0]);
+    });
 
     expect(workspace.chat.id).not.toBe(racedWorkspace.chat.id);
     expect(workspace.currentVersion.html).toBe("<p>Imported Word document</p>");
@@ -327,14 +315,11 @@ describe("ArticleRepository", () => {
         name: "article.docx",
       }),
     ]);
-
-    repository.close();
   });
 
   it("folds manual saves into the active version without adding history", () => {
     const repository = createTestRepository();
-    const baseline = repository.bootstrapArticle({
-      article: { id: "article-1", website: "news", articleType: "story" },
+    const baseline = bootstrapTestArticle(repository, {
       html: "<p>v1</p>",
     });
 
@@ -381,14 +366,11 @@ describe("ArticleRepository", () => {
           repository.getWorkspace("article-1")?.currentVersion.id,
         ),
     ).toThrow("only active version content is mutable");
-
-    repository.close();
   });
 
   it("queues a new sync for a manual save after its version was synced", () => {
     const repository = createTestRepository();
-    const baseline = repository.bootstrapArticle({
-      article: { id: "article-1", website: "news", articleType: "story" },
+    const baseline = bootstrapTestArticle(repository, {
       html: "before",
     });
     repository.completeHostSync(baseline.currentVersion.id);
@@ -402,14 +384,11 @@ describe("ArticleRepository", () => {
         expectedPreviousSha256: baseline.currentVersion.sha256,
       }),
     ]);
-
-    repository.close();
   });
 
   it("restores the manual edits folded into an LLM version", () => {
     const repository = createTestRepository();
-    repository.bootstrapArticle({
-      article: { id: "article-1", website: "news", articleType: "story" },
+    bootstrapTestArticle(repository, {
       html: "v1",
     });
     const { version: second } = commitAssistant(repository, "v2");
@@ -437,14 +416,11 @@ describe("ArticleRepository", () => {
       "v2 + manual",
     ]);
     expect(workspace?.article.html).toBe("v2 + manual");
-
-    repository.close();
   });
 
   it("rejects an assistant result created against a stale Version or session", () => {
     const repository = createTestRepository();
-    const baseline = repository.bootstrapArticle({
-      article: { id: "article-1", website: "news", articleType: "story" },
+    const baseline = bootstrapTestArticle(repository, {
       html: "v1",
     });
     repository.applySource({ articleId: "article-1", html: "manual" });
@@ -461,14 +437,11 @@ describe("ArticleRepository", () => {
       }),
     ).toThrow("changed while the refinement was running");
     expect(repository.getWorkspace("article-1")?.article.html).toBe("manual");
-
-    repository.close();
   });
 
   it("stores an assistant answer without creating or changing a Version", () => {
     const repository = createTestRepository();
-    const baseline = repository.bootstrapArticle({
-      article: { id: "article-1", website: "news", articleType: "story" },
+    const baseline = bootstrapTestArticle(repository, {
       html: "<article><h1>Current</h1></article>",
     });
 
@@ -489,14 +462,11 @@ describe("ArticleRepository", () => {
     expect(workspace?.versions).toHaveLength(1);
     expect(workspace?.currentVersion).toEqual(baseline.currentVersion);
     expect(workspace?.article.html).toBe("<article><h1>Current</h1></article>");
-
-    repository.close();
   });
 
   it("persists formatting-only LLM edits as a new synced Version", async () => {
     const repository = createTestRepository();
-    const baseline = repository.bootstrapArticle({
-      article: { id: "article-1", website: "news", articleType: "story" },
+    const baseline = bootstrapTestArticle(repository, {
       html: "<article><h1>Current</h1><p>Copy</p></article>",
     });
     repository.completeHostSync(baseline.currentVersion.id);
@@ -522,14 +492,11 @@ describe("ArticleRepository", () => {
         html: formatted,
       }),
     ]);
-
-    repository.close();
   });
 
   it("persists a safe error code with a failed assistant message", () => {
     const repository = createTestRepository();
-    repository.bootstrapArticle({
-      article: { id: "article-1", website: "news", articleType: "story" },
+    bootstrapTestArticle(repository, {
       html: "<p>Current</p>",
     });
 
@@ -547,14 +514,11 @@ describe("ArticleRepository", () => {
         errorCode: "internal_error",
       },
     );
-    repository.close();
   });
 
   it("stores uploads with their selected message", () => {
     const repository = createTestRepository();
-    repository.bootstrapArticle({
-      article: { id: "article-1", website: "news", articleType: "story" },
-    });
+    bootstrapTestArticle(repository);
     const upload = repository.addUpload({
       articleId: "article-1",
       name: "reference.md",
@@ -582,14 +546,11 @@ describe("ArticleRepository", () => {
         uploadIds: [upload.id],
       }),
     ).toThrow("An upload can be attached to only one message");
-
-    repository.close();
   });
 
   it("starts a replacement session atomically from current applied HTML", () => {
     const repository = createTestRepository();
-    const previous = repository.bootstrapArticle({
-      article: { id: "article-1", website: "news", articleType: "story" },
+    const previous = bootstrapTestArticle(repository, {
       html: "v1",
     });
     repository.applySource({ articleId: "article-1", html: "latest" });
@@ -617,8 +578,6 @@ describe("ArticleRepository", () => {
         .prepare("SELECT count(*) AS count FROM versions WHERE chat_id = ?")
         .get(previous.chat.id),
     ).toEqual({ count: 0 });
-
-    repository.close();
   });
 });
 

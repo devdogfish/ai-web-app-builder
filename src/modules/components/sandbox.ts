@@ -5,7 +5,10 @@ import type {
   ComponentDefinition,
   ComponentFieldSchema,
 } from "./contracts";
+import { mergeComponentData } from "./merge-data";
 import { assertValidComponentData } from "./schema";
+
+export { mergeComponentData } from "./merge-data";
 
 export class ComponentSandboxError extends Error {
   constructor(message: string) {
@@ -172,39 +175,6 @@ function prepareRuntimeProps(
     );
   }
   return value;
-}
-
-export function mergeComponentData(
-  defaults: ComponentData,
-  provided: ComponentData,
-): ComponentData;
-export function mergeComponentData(
-  defaults: unknown,
-  provided: unknown,
-): unknown;
-export function mergeComponentData(
-  defaults: unknown,
-  provided: unknown,
-): unknown {
-  if (
-    defaults &&
-    provided &&
-    typeof defaults === "object" &&
-    typeof provided === "object" &&
-    !Array.isArray(defaults) &&
-    !Array.isArray(provided)
-  ) {
-    const result: Record<string, unknown> = {
-      ...(defaults as Record<string, unknown>),
-    };
-    for (const [key, value] of Object.entries(
-      provided as Record<string, unknown>,
-    )) {
-      result[key] = mergeComponentData(result[key], value);
-    }
-    return result;
-  }
-  return provided;
 }
 
 function errorMessage(error: unknown): string {

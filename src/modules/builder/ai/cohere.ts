@@ -1,17 +1,14 @@
 import { ARTICLE_MODEL_DEFAULTS } from "./constants";
 import {
-  createRequestSignal,
   errorForProviderPayload,
-  normalizeThrownError,
   parseEventJson,
-  parseSse,
-  responseError,
+  streamProviderResponse,
+  type DecodedProviderEvent,
+  type SseEvent,
 } from "./http";
-import { buildArticleMessages, normalizeArticleModelOutput } from "./prompt";
 import {
   ArticleModelError,
   type ArticleModel,
-  type ArticleModelEvent,
   type ArticleModelRequest,
   type FetchLike,
 } from "./types";
@@ -53,9 +50,7 @@ export class CohereAdapter implements ArticleModel {
       throw new ArticleModelError(
         "configuration",
         "COHERE_API_KEY is required.",
-        {
-          provider: this.provider,
-        },
+        { provider: this.provider },
       );
     }
     this.model = options.model ?? ARTICLE_MODEL_DEFAULTS.cohere.model;
@@ -69,98 +64,68 @@ export class CohereAdapter implements ArticleModel {
     };
   }
 
-  async *stream(
+  stream(
     request: ArticleModelRequest,
     options: Readonly<{ signal?: AbortSignal }> = {},
-  ): AsyncIterable<ArticleModelEvent> {
-    const requestSignal = createRequestSignal(
-      options.signal,
-      this.options.timeoutMs,
-    );
-    let fullText = "";
-    let sawDone = false;
-
-    try {
-      const response = await this.options.fetch(this.options.endpoint, {
-        method: "POST",
+  ) {
+    return streamProviderResponse(
+      {
+        provider: this.provider,
+        model: this.model,
+        endpoint: this.options.endpoint,
         headers: {
           Authorization: `Bearer ${this.options.apiKey}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          model: this.model,
-          messages: buildArticleMessages(request),
-          stream: true,
-          max_tokens: this.options.maxOutputTokens,
-        }),
-        signal: requestSignal.signal,
-      });
+        timeoutMs: this.options.timeoutMs,
+        maxOutputTokens: this.options.maxOutputTokens,
+        fetch: this.options.fetch,
+      },
+      request,
+      options.signal,
+      (event) => this.decode(event),
+      "Cohere stream ended before its completion event.",
+    );
+  }
 
-      if (!response.ok) throw await responseError(response, this.provider);
-
-      for await (const event of parseSse(response.body, this.provider)) {
-        const chunk = parseEventJson(event.data, this.provider) as CohereChunk;
-        const type = typeof chunk.type === "string" ? chunk.type : event.event;
-        if (type === "error" || event.event === "error") {
-          throw errorForProviderPayload(
-            this.provider,
-            chunk.status_code ?? chunk.code,
-            chunk.message,
-          );
-        }
-        if (type && TERMINAL_COHERE_EVENTS.has(type)) {
-          const finishReason = chunk.delta?.finish_reason;
-          if (finishReason === "MAX_TOKENS") {
-            throw new ArticleModelError(
-              "malformed_response",
-              "Cohere stopped before completing Article HTML because the output limit was reached.",
-              { provider: this.provider },
-            );
-          }
-          if (typeof finishReason === "string" && finishReason !== "COMPLETE") {
-            throw new ArticleModelError(
-              "provider",
-              `Cohere stopped generation (${finishReason}).`,
-              { provider: this.provider },
-            );
-          }
-          sawDone = true;
-          break;
-        }
-        if (type !== "content-delta") continue;
-        const content = chunk.delta?.message?.content;
-        if (typeof content?.thinking === "string") continue;
-        if (typeof content?.text !== "string") {
-          throw new ArticleModelError(
-            "malformed_response",
-            "Cohere returned a malformed content delta.",
-            { provider: this.provider },
-          );
-        }
-        fullText += content.text;
-        yield { type: "text-delta", text: content.text };
-      }
-
-      if (!sawDone) {
+  private decode({ event, data }: SseEvent): DecodedProviderEvent | undefined {
+    const chunk = parseEventJson(data, this.provider) as CohereChunk;
+    const type = typeof chunk.type === "string" ? chunk.type : event;
+    if (type === "error" || event === "error") {
+      throw errorForProviderPayload(
+        this.provider,
+        chunk.status_code ?? chunk.code,
+        chunk.message,
+      );
+    }
+    if (type && TERMINAL_COHERE_EVENTS.has(type)) {
+      const finishReason = chunk.delta?.finish_reason;
+      if (finishReason === "MAX_TOKENS") {
         throw new ArticleModelError(
           "malformed_response",
-          "Cohere stream ended before its completion event.",
+          "Cohere stopped before completing Article HTML because the output limit was reached.",
           { provider: this.provider },
         );
       }
-      yield {
-        type: "finish",
-        result: normalizeArticleModelOutput(fullText, this.provider),
-      };
-    } catch (error) {
-      throw normalizeThrownError(
-        error,
-        this.provider,
-        options.signal,
-        requestSignal.didTimeout(),
-      );
-    } finally {
-      requestSignal.cleanup();
+      if (typeof finishReason === "string" && finishReason !== "COMPLETE") {
+        throw new ArticleModelError(
+          "provider",
+          `Cohere stopped generation (${finishReason}).`,
+          { provider: this.provider },
+        );
+      }
+      return { type: "finish" };
     }
+    if (type !== "content-delta") return undefined;
+    const content = chunk.delta?.message?.content;
+    if (typeof content?.thinking === "string") return undefined;
+    if (typeof content?.text !== "string") {
+      throw new ArticleModelError(
+        "malformed_response",
+        "Cohere returned a malformed content delta.",
+        { provider: this.provider },
+      );
+    }
+    return { type: "text-delta", text: content.text };
   }
 }

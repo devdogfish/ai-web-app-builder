@@ -1,4 +1,11 @@
-import { ArticleModelError } from "./types";
+import { buildArticleMessages, normalizeArticleModelOutput } from "./prompt";
+import {
+  ArticleModelError,
+  type ArticleModel,
+  type ArticleModelEvent,
+  type ArticleModelRequest,
+  type FetchLike,
+} from "./types";
 
 export function errorForStatus(provider: string, status: number, detail?: string): ArticleModelError {
   const suffix = detail ? ` ${detail}` : "";
@@ -200,5 +207,69 @@ export function parseEventJson(data: string, provider: string): unknown {
       `${provider} returned a malformed stream event.`,
       { provider, cause },
     );
+  }
+}
+
+export type DecodedProviderEvent =
+  Readonly<{ type: "text-delta"; text: string }> | Readonly<{ type: "finish" }>;
+
+type ProviderStreamConfig = Readonly<{
+  provider: ArticleModel["provider"];
+  model: string;
+  endpoint: string;
+  headers: Readonly<Record<string, string>>;
+  timeoutMs: number;
+  maxOutputTokens: number;
+  fetch: FetchLike;
+}>;
+
+export async function* streamProviderResponse(
+  config: ProviderStreamConfig,
+  request: ArticleModelRequest,
+  signal: AbortSignal | undefined,
+  decode: (event: SseEvent) => DecodedProviderEvent | undefined,
+  incompleteMessage: string,
+): AsyncIterable<ArticleModelEvent> {
+  const { provider } = config;
+  const requestSignal = createRequestSignal(signal, config.timeoutMs);
+  let fullText = "";
+  let completed = false;
+
+  try {
+    const response = await config.fetch(config.endpoint, {
+      method: "POST",
+      headers: config.headers,
+      body: JSON.stringify({
+        model: config.model,
+        messages: buildArticleMessages(request),
+        stream: true,
+        max_tokens: config.maxOutputTokens,
+      }),
+      signal: requestSignal.signal,
+    });
+
+    if (!response.ok) throw await responseError(response, provider);
+
+    for await (const event of parseSse(response.body, provider)) {
+      const decoded = decode(event);
+      if (!decoded) continue;
+      if (decoded.type === "finish") {
+        completed = true;
+        break;
+      }
+      fullText += decoded.text;
+      yield decoded;
+    }
+
+    if (!completed) {
+      throw new ArticleModelError("malformed_response", incompleteMessage, {
+        provider,
+      });
+    }
+    yield { type: "finish", result: normalizeArticleModelOutput(fullText, provider) };
+  } catch (error) {
+    throw normalizeThrownError(error, provider, signal, requestSignal.didTimeout());
+  } finally {
+    requestSignal.cleanup();
   }
 }

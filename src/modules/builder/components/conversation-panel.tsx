@@ -81,7 +81,7 @@ import {
   formatTurnDuration,
 } from "@/modules/builder/core/conversation-turn";
 import type { BuilderEnvironment } from "@/modules/builder/environment/types";
-import { cn } from "@/modules/builder/utils";
+import { cn, formatBytes } from "@/modules/builder/utils";
 
 export function ConversationPanel({
   environment,
@@ -872,19 +872,30 @@ function UserTurnMeta({ createdAt }: { createdAt: string }) {
 
 function TurnActivity({
   thinkingMs,
+  live = false,
+  activity,
   uploadNames,
 }: {
   thinkingMs: number | null;
+  live?: boolean;
+  activity?: string;
   uploadNames: string[];
 }) {
+  const Root = live ? "article" : "div";
+
   return (
-    <div
-      className="flex flex-col gap-3 text-xs text-muted-foreground"
-      aria-label="Assistant activity"
+    <Root
+      className={cn(
+        "flex flex-col gap-3 text-xs text-muted-foreground",
+        live && "min-w-0",
+      )}
+      aria-label={live ? undefined : "Assistant activity"}
     >
-      <div className="flex items-center gap-2">
-        <BrainCircuitIcon className="size-4" />
-        <span>Thought for {formatTurnDuration(thinkingMs ?? 0)}</span>
+      <div className="flex items-center gap-2" aria-live={live ? "polite" : undefined}>
+        <BrainCircuitIcon className={cn("size-4", live && "animate-pulse")} />
+        <span>
+          {activity ?? `Thought for ${formatTurnDuration(thinkingMs ?? 0)}`}
+        </span>
       </div>
       <div className="flex items-center gap-2">
         <SearchIcon className="size-4" />
@@ -899,7 +910,7 @@ function TurnActivity({
           <span className="truncate">Read {name}</span>
         </div>
       ))}
-    </div>
+    </Root>
   );
 }
 
@@ -921,29 +932,12 @@ function LiveTurnActivity({
   }, []);
 
   return (
-    <article className="flex min-w-0 flex-col gap-3 text-xs text-muted-foreground">
-      <div className="flex items-center gap-2" aria-live="polite">
-        <BrainCircuitIcon className="size-4 animate-pulse" />
-        <span>
-          {status === "Stopping…"
-            ? `Stopping after ${formatTurnDuration(elapsedMs)}`
-            : `Thinking for ${formatTurnDuration(elapsedMs)}`}
-        </span>
-      </div>
-      <div className="flex items-center gap-2">
-        <SearchIcon className="size-4" />
-        <span>Read article</span>
-      </div>
-      {uploadNames.map((name, index) => (
-        <div
-          key={`${name}-${index}`}
-          className="flex min-w-0 items-center gap-2"
-        >
-          <FileTextIcon className="size-4 shrink-0" />
-          <span className="truncate">Read {name}</span>
-        </div>
-      ))}
-    </article>
+    <TurnActivity
+      live
+      thinkingMs={elapsedMs}
+      activity={`${status === "Stopping…" ? "Stopping after" : "Thinking for"} ${formatTurnDuration(elapsedMs)}`}
+      uploadNames={uploadNames}
+    />
   );
 }
 
@@ -1083,12 +1077,6 @@ function formatRelativeTime(createdAt: string): string {
   const days = Math.floor(hours / 24);
   if (days < 365) return `${days}d ago`;
   return `${Math.floor(days / 365)}y ago`;
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function textareaHasMultipleLines(textarea: HTMLTextAreaElement): boolean {

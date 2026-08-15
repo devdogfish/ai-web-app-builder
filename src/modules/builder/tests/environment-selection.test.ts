@@ -12,7 +12,7 @@ describe("development website selection", () => {
   it("does not reuse one website's stored Article for another website", () => {
     const repository = createArticleRepository({ filename: ":memory:" });
     const rbccm = INITIAL_BUILDER_ENVIRONMENT;
-    const cmweb = switchDevelopmentWebsite(rbccm, "cmweb");
+    const cmweb = switchDevelopmentWebsite("cmweb");
     const rbccmConfig = getWebsiteConfig(rbccm.website);
 
     repository.bootstrapArticle({
@@ -35,27 +35,20 @@ describe("development website selection", () => {
   });
 
   it("changes the default Article identity when the website selector changes", () => {
-    const rbccm = INITIAL_BUILDER_ENVIRONMENT;
-    const cmweb = switchDevelopmentWebsite(
-      rbccm,
-      "cmweb",
-      () => "switch-one",
-    );
+    const cmweb = switchDevelopmentWebsite("cmweb", () => "switch-one");
 
     expect(cmweb).toMatchObject({
       articleId: "local-cmweb-switch-one",
       website: "cmweb",
     });
     expect(
-      switchDevelopmentWebsite(cmweb, "rbccm", () => "switch-two")
+      switchDevelopmentWebsite("rbccm", () => "switch-two")
         .articleId,
     ).toBe("local-rbccm-switch-two");
   });
 
   it("creates a new Article when the selected website is unchanged", () => {
-    const rbccm = INITIAL_BUILDER_ENVIRONMENT;
-
-    expect(switchDevelopmentWebsite(rbccm, "rbccm", () => "switch-three"))
+    expect(switchDevelopmentWebsite("rbccm", () => "switch-three"))
       .toMatchObject({
         articleId: "local-rbccm-switch-three",
         website: "rbccm",

@@ -41,7 +41,7 @@ import {
   ToggleGroupItem,
 } from "@/modules/builder/ui/toggle-group";
 import { formatModelPayload } from "@/modules/builder/uploads/format-model-payload";
-import { cn } from "@/modules/builder/utils";
+import { cn, formatBytes } from "@/modules/builder/utils";
 
 export interface AttachmentViewerTarget {
   upload: ReferenceUpload;
@@ -557,10 +557,4 @@ function ModelPayloadView({
       />
     </section>
   );
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }

@@ -44,10 +44,6 @@ export const WEBSITE_CONFIGS = {
 
 export const WEBSITES = ["rbccm", "cmweb"] as const satisfies readonly Website[];
 
-export function isWebsite(value: unknown): value is Website {
-  return typeof value === "string" && value in WEBSITE_CONFIGS;
-}
-
 export function getWebsiteConfig(website: Website): WebsiteConfig {
   return WEBSITE_CONFIGS[website];
 }
@@ -57,7 +53,6 @@ export function getDevelopmentArticleId(website: Website): string {
 }
 
 export function switchDevelopmentWebsite(
-  environment: BuilderEnvironment,
   website: Website,
   createId: () => string = () => crypto.randomUUID(),
 ): BuilderEnvironment {

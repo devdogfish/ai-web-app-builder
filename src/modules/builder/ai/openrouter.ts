@@ -1,17 +1,13 @@
 import { ARTICLE_MODEL_DEFAULTS } from "./constants";
 import {
-  createRequestSignal,
   errorForProviderPayload,
-  normalizeThrownError,
   parseEventJson,
-  parseSse,
-  responseError,
+  streamProviderResponse,
+  type DecodedProviderEvent,
 } from "./http";
-import { buildArticleMessages, normalizeArticleModelOutput } from "./prompt";
 import {
   ArticleModelError,
   type ArticleModel,
-  type ArticleModelEvent,
   type ArticleModelRequest,
   type FetchLike,
 } from "./types";
@@ -48,9 +44,7 @@ export class OpenRouterAdapter implements ArticleModel {
       throw new ArticleModelError(
         "configuration",
         "OPENROUTER_API_KEY is required.",
-        {
-          provider: this.provider,
-        },
+        { provider: this.provider },
       );
     }
     this.model = options.model ?? ARTICLE_MODEL_DEFAULTS.openRouter.model;
@@ -66,107 +60,72 @@ export class OpenRouterAdapter implements ArticleModel {
     };
   }
 
-  async *stream(
+  stream(
     request: ArticleModelRequest,
     options: Readonly<{ signal?: AbortSignal }> = {},
-  ): AsyncIterable<ArticleModelEvent> {
-    const requestSignal = createRequestSignal(
-      options.signal,
-      this.options.timeoutMs,
-    );
-    let fullText = "";
-    let sawDone = false;
+  ) {
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${this.options.apiKey}`,
+      "Content-Type": "application/json",
+    };
+    if (this.options.siteUrl) headers["HTTP-Referer"] = this.options.siteUrl;
+    if (this.options.appName) headers["X-Title"] = this.options.appName;
 
-    try {
-      const headers: Record<string, string> = {
-        Authorization: `Bearer ${this.options.apiKey}`,
-        "Content-Type": "application/json",
-      };
-      if (this.options.siteUrl) headers["HTTP-Referer"] = this.options.siteUrl;
-      if (this.options.appName) headers["X-Title"] = this.options.appName;
-
-      const response = await this.options.fetch(this.options.endpoint, {
-        method: "POST",
+    return streamProviderResponse(
+      {
+        provider: this.provider,
+        model: this.model,
+        endpoint: this.options.endpoint,
         headers,
-        body: JSON.stringify({
-          model: this.model,
-          messages: buildArticleMessages(request),
-          stream: true,
-          max_tokens: this.options.maxOutputTokens,
-        }),
-        signal: requestSignal.signal,
-      });
+        timeoutMs: this.options.timeoutMs,
+        maxOutputTokens: this.options.maxOutputTokens,
+        fetch: this.options.fetch,
+      },
+      request,
+      options.signal,
+      (event) => this.decode(event.data),
+      "OpenRouter stream ended before its completion marker.",
+    );
+  }
 
-      if (!response.ok) throw await responseError(response, this.provider);
-
-      for await (const event of parseSse(response.body, this.provider)) {
-        if (event.data === "[DONE]") {
-          sawDone = true;
-          break;
-        }
-        const chunk = parseEventJson(
-          event.data,
-          this.provider,
-        ) as OpenRouterChunk;
-        if (chunk.error) {
-          throw errorForProviderPayload(
-            this.provider,
-            chunk.error.code,
-            chunk.error.message,
-          );
-        }
-        const choice = chunk.choices?.[0];
-        if (choice?.finish_reason === "length") {
-          throw new ArticleModelError(
-            "malformed_response",
-            "OpenRouter stopped before completing Article HTML because the output limit was reached.",
-            { provider: this.provider },
-          );
-        }
-        if (
-          typeof choice?.finish_reason === "string" &&
-          choice.finish_reason !== "stop" &&
-          choice.finish_reason !== "length"
-        ) {
-          throw new ArticleModelError(
-            "provider",
-            `OpenRouter stopped generation (${choice.finish_reason}).`,
-            { provider: this.provider },
-          );
-        }
-        const content = choice?.delta?.content;
-        if (content === undefined || content === null) continue;
-        if (typeof content !== "string") {
-          throw new ArticleModelError(
-            "malformed_response",
-            "OpenRouter returned a malformed content delta.",
-            { provider: this.provider },
-          );
-        }
-        fullText += content;
-        yield { type: "text-delta", text: content };
-      }
-
-      if (!sawDone) {
-        throw new ArticleModelError(
-          "malformed_response",
-          "OpenRouter stream ended before its completion marker.",
-          { provider: this.provider },
-        );
-      }
-      yield {
-        type: "finish",
-        result: normalizeArticleModelOutput(fullText, this.provider),
-      };
-    } catch (error) {
-      throw normalizeThrownError(
-        error,
+  private decode(data: string): DecodedProviderEvent | undefined {
+    if (data === "[DONE]") return { type: "finish" };
+    const chunk = parseEventJson(data, this.provider) as OpenRouterChunk;
+    if (chunk.error) {
+      throw errorForProviderPayload(
         this.provider,
-        options.signal,
-        requestSignal.didTimeout(),
+        chunk.error.code,
+        chunk.error.message,
       );
-    } finally {
-      requestSignal.cleanup();
     }
+    const choice = chunk.choices?.[0];
+    if (choice?.finish_reason === "length") {
+      throw new ArticleModelError(
+        "malformed_response",
+        "OpenRouter stopped before completing Article HTML because the output limit was reached.",
+        { provider: this.provider },
+      );
+    }
+    if (
+      typeof choice?.finish_reason === "string" &&
+      choice.finish_reason !== "stop" &&
+      choice.finish_reason !== "length"
+    ) {
+      throw new ArticleModelError(
+        "provider",
+        `OpenRouter stopped generation (${choice.finish_reason}).`,
+        { provider: this.provider },
+      );
+    }
+    const content = choice?.delta?.content;
+    if (content === undefined || content === null) return undefined;
+    if (typeof content !== "string") {
+      throw new ArticleModelError(
+        "malformed_response",
+        "OpenRouter returned a malformed content delta.",
+        { provider: this.provider },
+      );
+    }
+    return { type: "text-delta", text: content };
   }
 }
