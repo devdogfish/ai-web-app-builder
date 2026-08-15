@@ -7,5 +7,6 @@ export async function formatHtmlSource(source: string): Promise<string> {
   return format(source, {
     parser: "html",
     plugins: [htmlPlugin.default],
+    htmlWhitespaceSensitivity: "ignore",
   });
 }

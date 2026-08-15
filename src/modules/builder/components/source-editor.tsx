@@ -1,12 +1,20 @@
 "use client";
 
 import { basicSetup } from "codemirror";
+import { autocompletion } from "@codemirror/autocomplete";
 import { html } from "@codemirror/lang-html";
+import { javascript } from "@codemirror/lang-javascript";
 import { unifiedMergeView } from "@codemirror/merge";
-import { redo, undo } from "@codemirror/commands";
+import { indentWithTab, redo, undo } from "@codemirror/commands";
+import {
+  linter,
+  lintGutter,
+  type Diagnostic as CodeMirrorDiagnostic,
+} from "@codemirror/lint";
 import { openSearchPanel } from "@codemirror/search";
 import {
   EditorState,
+  Prec,
   RangeSetBuilder,
   StateField,
   type Extension,
@@ -14,20 +22,29 @@ import {
 import {
   Decoration,
   EditorView,
+  keymap,
   WidgetType,
   type DecorationSet,
 } from "@codemirror/view";
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 
 import { vscodeSearchPanel } from "@/modules/builder/components/editor-search-panel";
+import { createArticleCompletionSource } from "@/modules/builder/components/managed-component-completion";
 import {
   findManagedComponentReferenceRanges,
+  managedComponentDisplayTag,
   type ManagedComponentReferenceRange,
 } from "@/modules/builder/components/managed-component-source";
+import {
+  externalSourceValueUpdate,
+  publishSourceChange,
+} from "@/modules/builder/components/source-editor-sync";
 import { cn } from "@/modules/builder/utils";
+import type { ComponentSummary } from "@/modules/components/contracts";
 
 export {
   findManagedComponentReferenceRanges,
+  readManagedComponentReference,
   type ManagedComponentReferenceRange,
 } from "@/modules/builder/components/managed-component-source";
 
@@ -37,9 +54,19 @@ export interface SourceEditorHandle {
   find: () => void;
 }
 
+export type SourceEditorLanguage = "html" | "tsx";
+
+export type SourceEditorDiagnostic = Pick<
+  CodeMirrorDiagnostic,
+  "from" | "to" | "severity" | "message" | "source"
+>;
+
+const EMPTY_COMPONENT_SUMMARIES: readonly ComponentSummary[] = [];
+
 class ManagedComponentWidget extends WidgetType {
   constructor(
     readonly reference: ManagedComponentReferenceRange,
+    readonly tag: string,
     readonly onClick: (reference: ManagedComponentReferenceRange) => void,
     readonly disabled: boolean,
   ) {
@@ -48,7 +75,8 @@ class ManagedComponentWidget extends WidgetType {
 
   eq(other: ManagedComponentWidget) {
     return (
-      other.reference.type === this.reference.type &&
+      other.reference.id === this.reference.id &&
+      other.tag === this.tag &&
       other.reference.index === this.reference.index &&
       other.disabled === this.disabled &&
       other.onClick === this.onClick
@@ -60,27 +88,47 @@ class ManagedComponentWidget extends WidgetType {
     button.type = "button";
     button.className = "cm-managed-component";
     button.disabled = this.disabled;
-    button.setAttribute(
-      "aria-label",
-      `Edit managed ${this.reference.type} Component`,
-    );
-    button.textContent = `<Component type="${this.reference.type}" />`;
-    button.addEventListener("click", () => this.onClick(this.reference));
+    button.setAttribute("aria-label", `Edit managed ${this.tag} Component`);
+
+    const open = document.createElement("span");
+    open.className = "cm-managed-component__punctuation";
+    open.textContent = "<";
+
+    const tag = document.createElement("span");
+    tag.className = "cm-managed-component__name";
+    tag.textContent = this.tag;
+
+    const close = document.createElement("span");
+    close.className = "cm-managed-component__punctuation";
+    close.textContent = " />";
+
+    button.append(open, tag, close);
+    button.addEventListener("mousedown", (event) => event.stopPropagation());
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      this.onClick(this.reference);
+    });
     return button;
   }
 
   ignoreEvent() {
-    return false;
+    return true;
   }
 }
 
 function managedComponentWidgets(
   onClick: (reference: ManagedComponentReferenceRange) => void,
   disabled: boolean,
+  summaries: readonly ComponentSummary[],
 ): Extension {
   const decorations = StateField.define<DecorationSet>({
     create(state) {
-      return buildManagedComponentDecorations(state, onClick, disabled);
+      return buildManagedComponentDecorations(
+        state,
+        onClick,
+        disabled,
+        summaries,
+      );
     },
     update(current, transaction) {
       if (!transaction.docChanged) return current;
@@ -88,6 +136,7 @@ function managedComponentWidgets(
         transaction.state,
         onClick,
         disabled,
+        summaries,
       );
     },
     provide: (field) => [
@@ -100,26 +149,35 @@ function managedComponentWidgets(
     decorations,
     EditorView.theme({
       ".cm-managed-component": {
-        display: "inline-flex",
-        alignItems: "center",
+        display: "inline",
         maxWidth: "100%",
-        border: "1px solid var(--border)",
-        borderRadius: "var(--radius-md)",
-        backgroundColor: "var(--muted)",
-        color: "var(--foreground)",
-        padding: "0.125rem 0.5rem",
+        appearance: "none",
+        border: "0",
+        borderRadius: "0.125rem",
+        backgroundColor: "transparent",
+        color: "inherit",
+        padding: "0",
         fontFamily: "var(--font-mono, monospace)",
         fontSize: "0.8125rem",
-        fontWeight: "600",
-        lineHeight: "1.5",
+        fontWeight: "500",
+        lineHeight: "inherit",
         cursor: "pointer",
       },
+      ".cm-managed-component__punctuation": {
+        color: "var(--muted-foreground)",
+      },
+      ".cm-managed-component__name": {
+        color: "var(--foreground)",
+        fontWeight: "650",
+      },
       ".cm-managed-component:hover": {
-        backgroundColor: "var(--accent)",
+        textDecorationLine: "underline",
+        textDecorationColor: "var(--ring)",
+        textUnderlineOffset: "0.2em",
       },
       ".cm-managed-component:focus-visible": {
         outline: "2px solid var(--ring)",
-        outlineOffset: "1px",
+        outlineOffset: "2px",
       },
       ".cm-managed-component:disabled": {
         cursor: "default",
@@ -133,15 +191,17 @@ function buildManagedComponentDecorations(
   state: EditorState,
   onClick: (reference: ManagedComponentReferenceRange) => void,
   disabled: boolean,
+  summaries: readonly ComponentSummary[],
 ) {
   const builder = new RangeSetBuilder<Decoration>();
   const references = findManagedComponentReferenceRanges(state.doc.toString());
   for (const reference of references) {
+    const tag = managedComponentDisplayTag(reference.id, summaries);
     builder.add(
       reference.from,
       reference.to,
       Decoration.replace({
-        widget: new ManagedComponentWidget(reference, onClick, disabled),
+        widget: new ManagedComponentWidget(reference, tag, onClick, disabled),
       }),
     );
   }
@@ -155,10 +215,20 @@ export const SourceEditor = forwardRef<
     onChange: (value: string) => void;
     original?: string;
     readOnly?: boolean;
+    id?: string;
     ariaLabel?: string;
     className?: string;
+    language?: SourceEditorLanguage;
+    componentSummaries?: readonly ComponentSummary[];
+    onSave?: (value: string) => void;
+    onLint?: (value: string) => Promise<readonly SourceEditorDiagnostic[]>;
     onManagedComponentClick?: (
       reference: ManagedComponentReferenceRange,
+    ) => void;
+    onManagedComponentInsert?: (
+      id: string,
+      source: string,
+      start: number,
     ) => void;
   }
 >(function SourceEditor(
@@ -167,9 +237,15 @@ export const SourceEditor = forwardRef<
     onChange,
     original,
     readOnly = false,
+    id,
     ariaLabel = "HTML source",
     className,
+    language = "html",
+    componentSummaries = EMPTY_COMPONENT_SUMMARIES,
+    onSave,
+    onLint,
     onManagedComponentClick,
+    onManagedComponentInsert,
   },
   ref,
 ) {
@@ -177,11 +253,24 @@ export const SourceEditor = forwardRef<
   const viewRef = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
   const onManagedComponentClickRef = useRef(onManagedComponentClick);
+  const onManagedComponentInsertRef = useRef(onManagedComponentInsert);
+  const onSaveRef = useRef(onSave);
+  const onLintRef = useRef(onLint);
+  const componentSummariesRef = useRef(componentSummaries);
   const valueRef = useRef(value);
   onChangeRef.current = onChange;
   onManagedComponentClickRef.current = onManagedComponentClick;
+  onManagedComponentInsertRef.current = onManagedComponentInsert;
+  onSaveRef.current = onSave;
+  onLintRef.current = onLint;
+  componentSummariesRef.current = componentSummaries;
   valueRef.current = value;
   const hasManagedComponentClick = onManagedComponentClick !== undefined;
+  const hasSave = onSave !== undefined;
+  const hasLint = onLint !== undefined;
+  const componentCatalogKey = componentSummaries
+    .map((summary) => `${summary.id}:${summary.tag}`)
+    .join("\0");
 
   useImperativeHandle(ref, () => ({
     undo: () => void (viewRef.current && undo(viewRef.current)),
@@ -204,11 +293,13 @@ export const SourceEditor = forwardRef<
 
   useEffect(() => {
     if (!hostRef.current) return;
-    const extensions = [
+    const extensions: Extension[] = [
       basicSetup,
-      html(),
+      Prec.highest(keymap.of([indentWithTab])),
+      language === "tsx"
+        ? javascript({ typescript: true, jsx: true })
+        : html({ selfClosingTags: true }),
       vscodeSearchPanel(),
-      EditorView.lineWrapping,
       EditorView.theme({
         "&": {
           height: "100%",
@@ -218,7 +309,7 @@ export const SourceEditor = forwardRef<
         ".cm-scroller": { overflow: "auto" },
         ".cm-content": { paddingBlock: "0.75rem" },
         ".cm-gutters": {
-          backgroundColor: "transparent",
+          backgroundColor: "var(--background)",
           borderRight: "1px solid var(--border)",
         },
         ".cm-panels-top": {
@@ -356,14 +447,42 @@ export const SourceEditor = forwardRef<
       EditorView.editable.of(!readOnly),
       EditorView.contentAttributes.of({ "aria-label": ariaLabel }),
       EditorView.updateListener.of((update) => {
-        if (update.docChanged) onChangeRef.current(update.state.doc.toString());
+        publishSourceChange(update, onChangeRef.current);
       }),
     ];
-    if (hasManagedComponentClick) {
+    if (language === "html") {
+      extensions.push(
+        autocompletion({
+          override: [
+            createArticleCompletionSource(
+              () => componentSummariesRef.current,
+              (componentId, source, start) =>
+                onManagedComponentInsertRef.current?.(
+                  componentId,
+                  source,
+                  start,
+                ),
+            ),
+          ],
+        }),
+      );
+    }
+    if (language === "tsx" && hasLint) {
+      extensions.push(
+        lintGutter(),
+        linter(
+          async (view) =>
+            (await onLintRef.current?.(view.state.doc.toString())) ?? [],
+          { delay: 350 },
+        ),
+      );
+    }
+    if (language === "html" && hasManagedComponentClick) {
       extensions.push(
         managedComponentWidgets(
           (reference) => onManagedComponentClickRef.current?.(reference),
           readOnly,
+          componentSummariesRef.current,
         ),
       );
     }
@@ -379,18 +498,47 @@ export const SourceEditor = forwardRef<
       view.destroy();
       viewRef.current = null;
     };
-  }, [ariaLabel, hasManagedComponentClick, original, readOnly]);
+  }, [
+    ariaLabel,
+    componentCatalogKey,
+    hasManagedComponentClick,
+    hasLint,
+    hasSave,
+    language,
+    original,
+    readOnly,
+  ]);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host || !hasSave) return;
+
+    function saveOnShortcut(event: KeyboardEvent) {
+      if (
+        !(event.metaKey || event.ctrlKey) ||
+        event.key.toLowerCase() !== "s"
+      ) {
+        return;
+      }
+      event.preventDefault();
+      const view = viewRef.current;
+      if (view) onSaveRef.current?.(view.state.doc.toString());
+    }
+
+    host.addEventListener("keydown", saveOnShortcut, { capture: true });
+    return () =>
+      host.removeEventListener("keydown", saveOnShortcut, { capture: true });
+  }, [hasSave]);
 
   useEffect(() => {
     const view = viewRef.current;
     if (!view || view.state.doc.toString() === value) return;
-    view.dispatch({
-      changes: { from: 0, to: view.state.doc.length, insert: value },
-    });
+    view.dispatch(externalSourceValueUpdate(view.state.doc.length, value));
   }, [value]);
 
   return (
     <div
+      id={id}
       ref={hostRef}
       className={cn(
         "h-full min-h-96 overflow-hidden bg-background lg:min-h-0",

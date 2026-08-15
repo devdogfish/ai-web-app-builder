@@ -1,10 +1,45 @@
-import { parseArticleSource } from "../../components/source";
+import {
+  parseArticleSource,
+  type ComponentReference,
+} from "../../components/source";
+import type { ComponentSummary } from "../../components/contracts";
 
 export interface ManagedComponentReferenceRange {
   from: number;
   to: number;
   index: number;
-  type: string;
+  id: string;
+}
+
+export function managedComponentDisplayTag(
+  id: string,
+  summaries: readonly ComponentSummary[],
+): string {
+  return summaries.find((summary) => summary.id === id)?.tag ?? "Component";
+}
+
+export function readManagedComponentReference(
+  source: string,
+  selected: ManagedComponentReferenceRange,
+): ComponentReference {
+  const candidate = source.slice(selected.from, selected.to);
+  const references = parseArticleSource(candidate).references;
+  const reference = references[0];
+  if (
+    references.length !== 1 ||
+    !reference ||
+    reference.start !== 0 ||
+    reference.end !== candidate.length ||
+    reference.id !== selected.id
+  ) {
+    throw new Error("The selected managed Component changed.");
+  }
+  return {
+    ...reference,
+    start: selected.from,
+    end: selected.to,
+    raw: candidate,
+  };
 }
 
 /** Finds complete managed references while tolerating another partial edit. */
@@ -16,7 +51,7 @@ export function findManagedComponentReferenceRanges(
       from: reference.start,
       to: reference.end,
       index,
-      type: reference.type,
+      id: reference.id,
     }));
   } catch {
     // Fall back to a tolerant scan while the document is temporarily invalid.
@@ -72,14 +107,28 @@ export function findManagedComponentReferenceRanges(
       cursor = from + "<Component".length;
       continue;
     }
-    const typeMatch = source
+    const idMatch = source
       .slice(from, to)
-      .match(/\btype\s*=\s*(["'])([^"']+)\1/);
-    if (typeMatch) {
-      ranges.push({ from, to, index: ranges.length, type: typeMatch[2] });
+      .match(/\b(?:id|type)\s*=\s*(["'])([^"']+)\1/);
+    const candidate = source.slice(from, to);
+    if (idMatch && isStandaloneComponentReference(candidate)) {
+      ranges.push({ from, to, index: ranges.length, id: idMatch[2] });
     }
     cursor = to;
   }
 
   return ranges;
+}
+
+function isStandaloneComponentReference(source: string): boolean {
+  try {
+    const references = parseArticleSource(source).references;
+    return (
+      references.length === 1 &&
+      references[0]!.start === 0 &&
+      references[0]!.end === source.length
+    );
+  } catch {
+    return false;
+  }
 }

@@ -18,12 +18,14 @@ import { BUILDER_LIMITS } from "@/modules/builder/config/builder";
 import type { BuilderArticleImage } from "@/modules/builder/core/contracts";
 import { compileBuilderPreview } from "@/modules/builder/core/client";
 import { useBuilderEnvironment } from "@/modules/builder/environment/provider";
+import { articleImagePreviewUrl } from "@/modules/builder/core/article-image-preview-url";
 
 export function ArticlePreview({
   source,
   assetPolicy,
   siteProfile,
   title,
+  versionId,
   images,
   onRuntimeError,
 }: {
@@ -31,6 +33,7 @@ export function ArticlePreview({
   assetPolicy: WebsiteAssetPolicy;
   siteProfile: PreviewSiteProfileId;
   title: string;
+  versionId: string | null;
   images: readonly BuilderArticleImage[];
   onRuntimeError: (error: string) => void;
 }) {
@@ -81,10 +84,15 @@ export function ArticlePreview({
         ? createPreviewDocument(compiledSource, assetPolicy, {
             siteProfile,
             assetOrigin: assetOrigin ?? undefined,
-            imageFallbacks: images.map((image) => ({
+            imageProxies: images.map((image) => ({
               productionPath: image.productionPath,
-              databaseUrl: new URL(
-                image.databasePreviewUrl,
+              previewUrl: new URL(
+                articleImagePreviewUrl(
+                  environment.articleId,
+                  image.id,
+                  image.productionUrl,
+                  `${versionId ?? "draft"}:${image.revision}`,
+                ),
                 assetOrigin ?? "http://localhost",
               ).toString(),
             })),
@@ -97,6 +105,8 @@ export function ArticlePreview({
       assetOrigin,
       needsAssetOrigin,
       images,
+      environment.articleId,
+      versionId,
     ],
   );
 

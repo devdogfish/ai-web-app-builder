@@ -5,17 +5,30 @@ import type {
 } from "./contracts";
 
 export function toComponentSummary(
-  definition: Pick<ComponentDefinition, "type" | "description">,
+  definition: Pick<ComponentDefinition, "id" | "tag" | "name" | "description">,
 ): ComponentSummary {
-  return { type: definition.type, description: definition.description };
+  return {
+    id: definition.id,
+    tag: definition.tag,
+    name: definition.name,
+    description: definition.description,
+  };
 }
 
 /** Tiny always-loaded registry context. Never includes Component shell HTML. */
 export function serializeComponentSummaryIndex(
-  definitions: Iterable<Pick<ComponentDefinition, "type" | "description">>,
+  definitions: Iterable<
+    Pick<ComponentDefinition, "id" | "tag" | "name" | "description">
+  >,
 ): string {
   return JSON.stringify(
-    [...definitions].map(toComponentSummary).sort((left, right) => left.type.localeCompare(right.type)),
+    [...definitions]
+      .map((definition) => ({
+        tag: definition.tag,
+        name: definition.name,
+        description: definition.description,
+      }))
+      .sort((left, right) => left.name.localeCompare(right.name)),
   );
 }
 
@@ -23,7 +36,9 @@ export function toComponentSpec(
   definition: ComponentDefinition,
 ): ComponentSpec {
   return {
-    type: definition.type,
+    id: definition.id,
+    tag: definition.tag,
+    name: definition.name,
     description: definition.description,
     schema: structuredClone(definition.schema),
     uiHints: structuredClone(definition.uiHints),
@@ -33,6 +48,21 @@ export function toComponentSpec(
 }
 
 /** Progressive-disclosure context. Deliberately excludes locked HTML/CSS/JS. */
-export function serializeComponentSpec(definition: ComponentDefinition): string {
-  return JSON.stringify(toComponentSpec(definition), null, 2);
+export function serializeComponentSpec(
+  definition: ComponentDefinition,
+): string {
+  const spec = toComponentSpec(definition);
+  return JSON.stringify(
+    {
+      tag: spec.tag,
+      name: spec.name,
+      description: spec.description,
+      schema: spec.schema,
+      uiHints: spec.uiHints,
+      defaultData: spec.defaultData,
+      sampleData: spec.sampleData,
+    },
+    null,
+    2,
+  );
 }

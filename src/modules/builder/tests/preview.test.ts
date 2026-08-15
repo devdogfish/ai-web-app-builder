@@ -69,26 +69,27 @@ describe("preview document", () => {
     }
   });
 
-  it("switches failed production images to their database URLs", () => {
+  it("routes production image paths through their CMS-first preview proxies", () => {
     const result = createPreviewDocument(
       '<img src="/media/articles/story-01.webp">',
       policy,
       {
         assetOrigin: "http://localhost:3000",
-        imageFallbacks: [
+        imageProxies: [
           {
             productionPath: "/media/articles/story-01.webp",
-            databaseUrl:
-              "http://localhost:3000/api/articles/article-1/images/image-1",
+            previewUrl:
+              "http://localhost:3000/api/articles/article-1/images/image-1?production=https%3A%2F%2Fcms.example.test%2Fmedia%2Farticles%2Fstory-01.webp",
           },
         ],
       },
     );
 
     expect(result).toContain(
-      '"/media/articles/story-01.webp":"http://localhost:3000/api/articles/article-1/images/image-1"',
+      '"/media/articles/story-01.webp":"http://localhost:3000/api/articles/article-1/images/image-1?production=https%3A%2F%2Fcms.example.test%2Fmedia%2Farticles%2Fstory-01.webp"',
     );
-    expect(result).toContain('image.dataset.databaseFallbackAttempted="true"');
+    expect(result).toContain('document.querySelectorAll("img").forEach(apply)');
+    expect(result).toContain('image.dataset.previewProxyApplied="true"');
     expect(result).toContain(
       "img-src https://cms.example.test http://localhost:3000",
     );

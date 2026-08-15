@@ -1,48 +1,50 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
 import Database from "better-sqlite3";
+import { and, asc, eq, isNull, ne, sql } from "drizzle-orm";
+import {
+  drizzle,
+  type BetterSQLite3Database,
+} from "drizzle-orm/better-sqlite3";
 
+import { prepareComponentDefinition } from "./authoring";
 import { BUILTIN_COMPONENTS } from "./builtins";
+import {
+  compileArticleSource,
+  materializeComponentId,
+  validateComponentTemplate,
+} from "./compiler";
 import type {
   ComponentDefinition,
   ComponentDefinitionInput,
   ComponentSummary,
 } from "./contracts";
-import {
-  compileArticleSource,
-  materializeComponentType,
-  validateComponentTemplate,
-} from "./compiler";
 import { initializeComponentsDatabase } from "./db/initialize";
-import { normalizeComponentInput } from "./schema";
+import { componentDefinitions } from "./db/schema";
+import { formatComponentSource } from "./format-source";
+import { componentTagFromName } from "./identity";
+import { assertValidPreparedComponentContract } from "./schema";
+import { parseArticleSource } from "./source";
+import { articles, builderChats, versions } from "../builder/db/schema";
 
 export const COMPONENTS_DATABASE_ENV = "ARTICLE_BUILDER_DATABASE_PATH";
 export const DEFAULT_COMPONENTS_DATABASE_PATH = ".data/article-builder.sqlite";
 
-interface ComponentRow {
-  type: string;
-  description: string;
-  html_template: string;
-  schema_json: string;
-  ui_hints_json: string;
-  default_data_json: string;
-  sample_data_json: string;
-  created_at: number;
-  updated_at: number;
-  deleted_at: number | null;
-}
-
+const schema = { componentDefinitions, articles, builderChats, versions };
+type ComponentRepositoryDatabase = BetterSQLite3Database<typeof schema>;
+type ComponentRow = typeof componentDefinitions.$inferSelect;
 export interface ComponentRepositoryOptions {
   filename?: string;
   sqlite?: Database.Database;
   now?: () => Date;
+  createId?: () => string;
   seedBuiltins?: boolean;
 }
 
 export interface DeleteComponentResult {
-  type: string;
+  id: string;
   materializedArticles: number;
   materializedActiveVersions: number;
   deletedAt: Date;
@@ -53,8 +55,6 @@ export class ComponentRepositoryError extends Error {
     public readonly code:
       | "component_not_found"
       | "component_exists"
-      | "component_type_retired"
-      | "component_type_immutable"
       | "component_update_breaks_articles"
       | "corrupt_component",
     message: string,
@@ -65,7 +65,9 @@ export class ComponentRepositoryError extends Error {
 }
 
 function configuredFilename(): string {
-  return process.env[COMPONENTS_DATABASE_ENV] ?? DEFAULT_COMPONENTS_DATABASE_PATH;
+  return (
+    process.env[COMPONENTS_DATABASE_ENV] ?? DEFAULT_COMPONENTS_DATABASE_PATH
+  );
 }
 
 function openSqlite(filename: string): Database.Database {
@@ -79,64 +81,75 @@ function digest(source: string): string {
   return createHash("sha256").update(source).digest("hex");
 }
 
-function tableExists(sqlite: Database.Database, table: string): boolean {
-  return Boolean(
-    sqlite
-      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
-      .get(table),
-  );
-}
-
 function parseRow(row: ComponentRow): ComponentDefinition {
   try {
-    const normalized = normalizeComponentInput({
-      type: row.type,
-      description: row.description,
-      htmlTemplate: row.html_template,
-      schema: JSON.parse(row.schema_json),
-      uiHints: JSON.parse(row.ui_hints_json),
-      defaultData: JSON.parse(row.default_data_json),
-      sampleData: JSON.parse(row.sample_data_json),
-    });
     const definition: ComponentDefinition = {
-      ...normalized,
-      createdAt: new Date(row.created_at),
-      updatedAt: new Date(row.updated_at),
-      deletedAt: row.deleted_at === null ? null : new Date(row.deleted_at),
+      id: row.id,
+      tag: row.tag,
+      name: row.name,
+      description: row.description,
+      source: row.source,
+      compiledSource: row.compiledSource,
+      schema: JSON.parse(row.schemaJson),
+      uiHints: JSON.parse(row.uiHintsJson),
+      defaultData: JSON.parse(row.defaultDataJson),
+      sampleData: JSON.parse(row.sampleDataJson),
+      createdAt: new Date(row.createdAt),
+      updatedAt: new Date(row.updatedAt),
+      deletedAt: row.deletedAt === null ? null : new Date(row.deletedAt),
     };
-    validateComponentTemplate(definition);
+    if (!definition.source || !definition.compiledSource) {
+      throw new Error("stored source is empty");
+    }
+    if (componentTagFromName(definition.name) !== definition.tag) {
+      throw new Error("stored tag does not match its Component Name");
+    }
+    assertValidPreparedComponentContract(definition);
     return definition;
   } catch (error) {
     throw new ComponentRepositoryError(
       "corrupt_component",
-      `Stored Component ${row.type} is invalid: ${error instanceof Error ? error.message : "unknown error"}`,
+      `Stored Component ${row.id} is invalid: ${errorMessage(error)}`,
     );
   }
 }
 
-function asStoredValues(input: Required<ComponentDefinitionInput>) {
+function asStoredValues(
+  definition: Omit<
+    ComponentDefinition,
+    "createdAt" | "updatedAt" | "deletedAt"
+  >,
+) {
   return {
-    type: input.type,
-    description: input.description,
-    htmlTemplate: input.htmlTemplate,
-    schemaJson: JSON.stringify(input.schema),
-    uiHintsJson: JSON.stringify(input.uiHints),
-    defaultDataJson: JSON.stringify(input.defaultData),
-    sampleDataJson: JSON.stringify(input.sampleData),
+    tag: definition.tag,
+    id: definition.id,
+    name: definition.name,
+    description: definition.description,
+    source: definition.source,
+    compiledSource: definition.compiledSource,
+    schemaJson: JSON.stringify(definition.schema),
+    uiHintsJson: JSON.stringify(definition.uiHints),
+    defaultDataJson: JSON.stringify(definition.defaultData),
+    sampleDataJson: JSON.stringify(definition.sampleData),
   };
 }
 
 export class ComponentRepository {
+  readonly db: ComponentRepositoryDatabase;
   readonly sqlite: Database.Database;
 
   private readonly ownsConnection: boolean;
   private readonly now: () => Date;
+  private readonly createId: () => string;
 
   constructor(options: ComponentRepositoryOptions = {}) {
-    this.sqlite = options.sqlite ?? openSqlite(options.filename ?? configuredFilename());
+    this.sqlite =
+      options.sqlite ?? openSqlite(options.filename ?? configuredFilename());
     this.ownsConnection = !options.sqlite;
     this.now = options.now ?? (() => new Date());
+    this.createId = options.createId ?? randomUUID;
     initializeComponentsDatabase(this.sqlite);
+    this.db = drizzle(this.sqlite, { schema });
     if (options.seedBuiltins !== false) this.seedBuiltins();
   }
 
@@ -145,243 +158,314 @@ export class ComponentRepository {
   }
 
   list(): ComponentDefinition[] {
-    const rows = this.sqlite
-      .prepare(
-        "SELECT * FROM component_definitions WHERE deleted_at IS NULL ORDER BY type ASC",
+    const rows = this.db
+      .select()
+      .from(componentDefinitions)
+      .where(isNull(componentDefinitions.deletedAt))
+      .orderBy(
+        asc(componentDefinitions.name),
+        asc(componentDefinitions.tag),
+        asc(componentDefinitions.id),
       )
-      .all() as ComponentRow[];
+      .all();
     return rows.map(parseRow);
   }
 
   listSummaries(): ComponentSummary[] {
-    return this.sqlite
-      .prepare(
-        "SELECT type, description FROM component_definitions WHERE deleted_at IS NULL ORDER BY type ASC",
+    return this.db
+      .select({
+        id: componentDefinitions.id,
+        tag: componentDefinitions.tag,
+        name: componentDefinitions.name,
+        description: componentDefinitions.description,
+      })
+      .from(componentDefinitions)
+      .where(isNull(componentDefinitions.deletedAt))
+      .orderBy(
+        asc(componentDefinitions.name),
+        asc(componentDefinitions.tag),
+        asc(componentDefinitions.id),
       )
-      .all() as ComponentSummary[];
+      .all();
   }
 
-  get(type: string): ComponentDefinition | null {
-    const row = this.sqlite
-      .prepare("SELECT * FROM component_definitions WHERE type = ? AND deleted_at IS NULL")
-      .get(type) as ComponentRow | undefined;
+  get(id: string): ComponentDefinition | null {
+    const row = this.db
+      .select()
+      .from(componentDefinitions)
+      .where(
+        and(
+          eq(componentDefinitions.id, id),
+          isNull(componentDefinitions.deletedAt),
+        ),
+      )
+      .get();
     return row ? parseRow(row) : null;
   }
 
-  /** Includes hidden tombstones so historical article versions remain compilable. */
-  getForCompilation(type: string): ComponentDefinition | null {
-    const row = this.sqlite
-      .prepare("SELECT * FROM component_definitions WHERE type = ?")
-      .get(type) as ComponentRow | undefined;
+  getByTag(tag: string): ComponentDefinition | null {
+    const row = this.db
+      .select()
+      .from(componentDefinitions)
+      .where(
+        and(
+          eq(componentDefinitions.tag, tag),
+          isNull(componentDefinitions.deletedAt),
+        ),
+      )
+      .get();
     return row ? parseRow(row) : null;
   }
 
-  create(input: ComponentDefinitionInput): ComponentDefinition {
-    const normalized = normalizeComponentInput(input);
-    const existing = this.sqlite
-      .prepare("SELECT deleted_at FROM component_definitions WHERE type = ?")
-      .get(normalized.type) as { deleted_at: number | null } | undefined;
-    if (existing?.deleted_at) {
-      throw new ComponentRepositoryError(
-        "component_type_retired",
-        `Component type ${normalized.type} was deleted and cannot be reused because history still references it.`,
-      );
-    }
+  /** Includes tombstones so historical article versions remain compilable. */
+  getForCompilation(id: string): ComponentDefinition | null {
+    const row = this.db
+      .select()
+      .from(componentDefinitions)
+      .where(eq(componentDefinitions.id, id))
+      .get();
+    return row ? parseRow(row) : null;
+  }
+
+  async create(input: ComponentDefinitionInput): Promise<ComponentDefinition> {
+    const source = await formatComponentSource(input.source);
+    const prepared = {
+      ...prepareComponentDefinition({ ...input, source }),
+      source,
+    };
+    const existing = this.db
+      .select({ id: componentDefinitions.id })
+      .from(componentDefinitions)
+      .where(
+        and(
+          eq(componentDefinitions.tag, prepared.tag),
+          isNull(componentDefinitions.deletedAt),
+        ),
+      )
+      .get();
     if (existing) {
       throw new ComponentRepositoryError(
         "component_exists",
-        `Component type ${normalized.type} already exists.`,
+        `Component tag ${prepared.tag} already exists.`,
       );
     }
     const now = this.now();
     const candidate: ComponentDefinition = {
-      ...normalized,
+      ...prepared,
+      id: this.createId(),
       createdAt: now,
       updatedAt: now,
       deletedAt: null,
     };
-    validateComponentTemplate(candidate);
-    const stored = asStoredValues(normalized);
-    this.sqlite
-      .prepare(`
-        INSERT INTO component_definitions (
-          type, description, html_template, schema_json, ui_hints_json,
-          default_data_json, sample_data_json, created_at, updated_at, deleted_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
-      `)
-      .run(
-        stored.type,
-        stored.description,
-        stored.htmlTemplate,
-        stored.schemaJson,
-        stored.uiHintsJson,
-        stored.defaultDataJson,
-        stored.sampleDataJson,
-        now.getTime(),
-        now.getTime(),
-      );
+    await validateComponentTemplate(candidate);
+    const stored = asStoredValues(candidate);
+    this.db
+      .insert(componentDefinitions)
+      .values({
+        ...stored,
+        createdAt: now,
+        updatedAt: now,
+        deletedAt: null,
+      })
+      .run();
     return candidate;
   }
 
-  update(type: string, input: ComponentDefinitionInput): ComponentDefinition {
-    if (type !== input.type) {
+  async update(
+    id: string,
+    input: ComponentDefinitionInput,
+  ): Promise<ComponentDefinition> {
+    const current = this.get(id);
+    if (!current) {
       throw new ComponentRepositoryError(
-        "component_type_immutable",
-        "Component type cannot be renamed. Create a new Component instead.",
+        "component_not_found",
+        `Component ${id} does not exist.`,
       );
     }
-    const current = this.get(type);
-    if (!current) {
-      throw new ComponentRepositoryError("component_not_found", `Component ${type} does not exist.`);
-    }
-    const normalized = normalizeComponentInput(input);
+    const source = await formatComponentSource(input.source);
+    const prepared = {
+      ...prepareComponentDefinition({
+        ...input,
+        name: input.name ?? current.name,
+        description: input.description ?? current.description,
+        source,
+      }),
+      source,
+    };
     const now = this.now();
+    const collision = this.db
+      .select({ id: componentDefinitions.id })
+      .from(componentDefinitions)
+      .where(
+        and(
+          eq(componentDefinitions.tag, prepared.tag),
+          ne(componentDefinitions.id, id),
+          isNull(componentDefinitions.deletedAt),
+        ),
+      )
+      .get();
+    if (collision) {
+      throw new ComponentRepositoryError(
+        "component_exists",
+        `Component tag ${prepared.tag} already exists.`,
+      );
+    }
     const candidate: ComponentDefinition = {
-      ...normalized,
+      ...prepared,
+      id: current.id,
       createdAt: current.createdAt,
       updatedAt: now,
       deletedAt: null,
     };
-    validateComponentTemplate(candidate);
+    await validateComponentTemplate(candidate);
     try {
-      this.assertStoredReferencesRender(type, candidate);
+      await this.assertStoredReferencesRender(id, candidate);
     } catch (error) {
       throw new ComponentRepositoryError(
         "component_update_breaks_articles",
-        `Component update would break a managed article: ${error instanceof Error ? error.message : "invalid existing data"}`,
+        `Component update would break a managed article: ${errorMessage(error)}`,
       );
     }
-    const stored = asStoredValues(normalized);
-    this.sqlite
-      .prepare(`
-        UPDATE component_definitions SET
-          description = ?, html_template = ?, schema_json = ?, ui_hints_json = ?,
-          default_data_json = ?, sample_data_json = ?, updated_at = ?
-        WHERE type = ? AND deleted_at IS NULL
-      `)
-      .run(
-        stored.description,
-        stored.htmlTemplate,
-        stored.schemaJson,
-        stored.uiHintsJson,
-        stored.defaultDataJson,
-        stored.sampleDataJson,
-        now.getTime(),
-        type,
-      );
+    const stored = asStoredValues(candidate);
+    this.db
+      .update(componentDefinitions)
+      .set({ ...stored, updatedAt: now })
+      .where(
+        and(
+          eq(componentDefinitions.id, id),
+          isNull(componentDefinitions.deletedAt),
+        ),
+      )
+      .run();
     return candidate;
   }
 
-  deleteAndMaterialize(type: string): DeleteComponentResult {
-    const definition = this.get(type);
+  async deleteAndMaterialize(id: string): Promise<DeleteComponentResult> {
+    const definition = this.get(id);
     if (!definition) {
-      throw new ComponentRepositoryError("component_not_found", `Component ${type} does not exist.`);
+      throw new ComponentRepositoryError(
+        "component_not_found",
+        `Component ${id} does not exist.`,
+      );
     }
     const deletedAt = this.now();
-    return this.sqlite.transaction(() => {
-      let materializedArticles = 0;
-      let materializedActiveVersions = 0;
+    const articleUpdates: Array<{ id: string; source: string }> = [];
+    const versionUpdates: Array<{ id: string; source: string }> = [];
 
-      if (tableExists(this.sqlite, "articles")) {
-        const rows = this.sqlite
-          .prepare("SELECT id, html FROM articles WHERE html LIKE '%<Component%'")
-          .all() as Array<{ id: string; html: string }>;
-        const update = this.sqlite.prepare(
-          "UPDATE articles SET html = ?, updated_at = ? WHERE id = ?",
-        );
-        for (const row of rows) {
-          const materialized = materializeComponentType(row.html, type, definition);
-          if (materialized === row.html) continue;
-          update.run(materialized, deletedAt.getTime(), row.id);
-          materializedArticles++;
-        }
+    const articleRows = this.db
+      .select({ id: articles.id, html: articles.html })
+      .from(articles)
+      .where(sql`${articles.html} LIKE '%<Component%'`)
+      .all();
+    for (const row of articleRows) {
+      const source = await materializeComponentId(row.html, id, definition);
+      if (source !== row.html) articleUpdates.push({ id: row.id, source });
+    }
+
+    const versionRows = this.db
+      .select({ id: versions.id, html: versions.html })
+      .from(versions)
+      .innerJoin(builderChats, eq(builderChats.currentVersionId, versions.id))
+      .where(sql`${versions.html} LIKE '%<Component%'`)
+      .all();
+    for (const row of versionRows) {
+      const source = await materializeComponentId(row.html, id, definition);
+      if (source !== row.html) versionUpdates.push({ id: row.id, source });
+    }
+
+    this.db.transaction((tx) => {
+      for (const update of articleUpdates) {
+        tx.update(articles)
+          .set({ html: update.source, updatedAt: deletedAt })
+          .where(eq(articles.id, update.id))
+          .run();
       }
-
-      if (tableExists(this.sqlite, "versions") && tableExists(this.sqlite, "builder_chats")) {
-        const rows = this.sqlite
-          .prepare(`
-            SELECT version.id, version.html
-            FROM versions AS version
-            JOIN builder_chats AS chat ON chat.current_version_id = version.id
-            WHERE version.html LIKE '%<Component%'
-          `)
-          .all() as Array<{ id: string; html: string }>;
-        const update = this.sqlite.prepare("UPDATE versions SET html = ?, sha256 = ? WHERE id = ?");
-        for (const row of rows) {
-          const materialized = materializeComponentType(row.html, type, definition);
-          if (materialized === row.html) continue;
-          const sha256 = digest(materialized);
-          update.run(materialized, sha256, row.id);
-          materializedActiveVersions++;
-        }
+      for (const update of versionUpdates) {
+        tx.update(versions)
+          .set({ html: update.source, sha256: digest(update.source) })
+          .where(eq(versions.id, update.id))
+          .run();
       }
+      tx.update(componentDefinitions)
+        .set({ deletedAt, updatedAt: deletedAt })
+        .where(eq(componentDefinitions.id, id))
+        .run();
+    });
 
-      this.sqlite
-        .prepare("UPDATE component_definitions SET deleted_at = ?, updated_at = ? WHERE type = ?")
-        .run(deletedAt.getTime(), deletedAt.getTime(), type);
-      return { type, materializedArticles, materializedActiveVersions, deletedAt };
-    })();
+    return {
+      id,
+      materializedArticles: articleUpdates.length,
+      materializedActiveVersions: versionUpdates.length,
+      deletedAt,
+    };
   }
 
   private seedBuiltins(): void {
-    const insert = this.sqlite.prepare(`
-      INSERT OR IGNORE INTO component_definitions (
-        type, description, html_template, schema_json, ui_hints_json,
-        default_data_json, sample_data_json, created_at, updated_at, deleted_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
-    `);
     const now = this.now();
-    this.sqlite.transaction(() => {
+    this.db.transaction((tx) => {
       for (const input of BUILTIN_COMPONENTS) {
-        const normalized = normalizeComponentInput(input);
-        const definition: ComponentDefinition = {
-          ...normalized,
-          createdAt: now,
-          updatedAt: now,
-          deletedAt: null,
-        };
-        validateComponentTemplate(definition);
-        const stored = asStoredValues(normalized);
-        insert.run(
-          stored.type,
-          stored.description,
-          stored.htmlTemplate,
-          stored.schemaJson,
-          stored.uiHintsJson,
-          stored.defaultDataJson,
-          stored.sampleDataJson,
-          now.getTime(),
-          now.getTime(),
-        );
+        const prepared = prepareComponentDefinition(input);
+        // Deterministic IDs make repeated built-in seeding idempotent.
+        const id = prepared.tag
+          .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+          .toLowerCase();
+        const stored = asStoredValues({ ...prepared, id });
+        tx.insert(componentDefinitions)
+          .values({
+            ...stored,
+            createdAt: now,
+            updatedAt: now,
+            deletedAt: null,
+          })
+          .onConflictDoNothing()
+          .run();
       }
-    })();
+    });
   }
 
-  private assertStoredReferencesRender(
-    type: string,
+  private async assertStoredReferencesRender(
+    id: string,
     candidate: ComponentDefinition,
-  ): void {
+  ): Promise<void> {
     const sources: string[] = [];
-    if (tableExists(this.sqlite, "articles")) {
-      const rows = this.sqlite
-        .prepare("SELECT html FROM articles WHERE html LIKE '%<Component%'")
-        .all() as Array<{ html: string }>;
-      sources.push(...rows.map((row) => row.html));
-    }
-    if (tableExists(this.sqlite, "versions")) {
-      const rows = this.sqlite
-        .prepare("SELECT html FROM versions WHERE html LIKE '%<Component%'")
-        .all() as Array<{ html: string }>;
-      sources.push(...rows.map((row) => row.html));
-    }
-    const lookup = (requestedType: string) =>
-      requestedType === type
-        ? candidate
-        : this.getForCompilation(requestedType);
-    for (const source of sources) compileArticleSource(source, lookup);
+    const articleRows = this.db
+      .select({ html: articles.html })
+      .from(articles)
+      .where(sql`${articles.html} LIKE '%<Component%'`)
+      .all();
+    sources.push(
+      ...articleRows
+        .map((row) => row.html)
+        .filter((source) => sourceReferencesId(source, id)),
+    );
+    const versionRows = this.db
+      .select({ html: versions.html })
+      .from(versions)
+      .where(sql`${versions.html} LIKE '%<Component%'`)
+      .all();
+    sources.push(
+      ...versionRows
+        .map((row) => row.html)
+        .filter((source) => sourceReferencesId(source, id)),
+    );
+    const lookup = (requestedId: string) =>
+      requestedId === id ? candidate : this.getForCompilation(requestedId);
+    for (const source of sources) await compileArticleSource(source, lookup);
   }
 }
 
-export function createComponentRepository(options?: ComponentRepositoryOptions): ComponentRepository {
+function sourceReferencesId(source: string, id: string): boolean {
+  return parseArticleSource(source).references.some(
+    (reference) => reference.id === id,
+  );
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "unknown error";
+}
+
+export function createComponentRepository(
+  options?: ComponentRepositoryOptions,
+): ComponentRepository {
   return new ComponentRepository(options);
 }

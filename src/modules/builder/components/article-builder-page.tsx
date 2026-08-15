@@ -203,6 +203,10 @@ export function ArticleBuilderPage() {
             onPromptChange={controller.setPrompt}
             onSelectedUploadIdsChange={controller.setSelectedUploadIds}
             onUpload={controller.addUploads}
+            onAddArticleImages={controller.addArticleImages}
+            onReorderArticleImages={controller.reorderImages}
+            onRemoveArticleImage={controller.removeImage}
+            onConvertArticleImageToJpeg={controller.convertImageToJpeg}
             onSend={() => controller.send()}
             onStop={controller.stop}
             onViewVersionDiff={viewVersionDiff}

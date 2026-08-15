@@ -1,6 +1,12 @@
-import type { ComponentData, ComponentFieldSchema, ComponentSchema } from "./contracts";
+import type {
+  ComponentData,
+  ComponentFieldSchema,
+  ComponentSchema,
+} from "./contracts";
 
-export const HTML_LITERAL = Symbol.for("article-builder.component-html-literal");
+export const HTML_LITERAL = Symbol.for(
+  "article-builder.component-html-literal",
+);
 export const MAX_ARTICLE_SOURCE_BYTES = 4 * 1024 * 1024;
 export const MAX_COMPONENT_SOURCE_VALUE_DEPTH = 16;
 export const MAX_COMPONENT_SOURCE_VALUE_NODES = 10_000;
@@ -38,7 +44,7 @@ export type ComponentSourceValue =
   | { [key: string]: ComponentSourceValue };
 
 export interface ComponentReference {
-  type: string;
+  id: string;
   data: Record<string, ComponentSourceValue>;
   start: number;
   end: number;
@@ -48,6 +54,12 @@ export interface ComponentReference {
 export interface ParsedArticleSource {
   source: string;
   references: ComponentReference[];
+}
+
+export interface ComponentTagIdentity {
+  id: string;
+  tag: string;
+  schema?: ComponentSchema;
 }
 
 export class ComponentSourceSyntaxError extends Error {
@@ -83,9 +95,12 @@ class ValueParser {
     if (char === "[") return this.parseArray(depth);
     if (char === '"' || char === "'") return this.parseString();
     if (char === "-" || (char && /[0-9]/.test(char))) return this.parseNumber();
-    if (this.source.startsWith("true", this.index)) return this.keyword("true", true);
-    if (this.source.startsWith("false", this.index)) return this.keyword("false", false);
-    if (this.source.startsWith("null", this.index)) return this.keyword("null", null);
+    if (this.source.startsWith("true", this.index))
+      return this.keyword("true", true);
+    if (this.source.startsWith("false", this.index))
+      return this.keyword("false", false);
+    if (this.source.startsWith("null", this.index))
+      return this.keyword("null", null);
     if (this.source.startsWith("html", this.index)) return this.parseHtml();
     this.fail("Expected a restricted data value");
   }
@@ -102,7 +117,10 @@ class ValueParser {
     while (true) {
       this.skipWhitespace();
       const char = this.source[this.index];
-      const key = char === '"' || char === "'" ? this.parseString() : this.parseIdentifier();
+      const key =
+        char === '"' || char === "'"
+          ? this.parseString()
+          : this.parseIdentifier();
       if (typeof key !== "string") this.fail("Object key must be a string");
       if (Object.prototype.hasOwnProperty.call(result, key)) {
         this.fail(`Duplicate data key ${JSON.stringify(key)}`);
@@ -177,7 +195,8 @@ class ValueParser {
         }
         continue;
       }
-      if (this.index >= this.source.length) this.fail("Unterminated string escape");
+      if (this.index >= this.source.length)
+        this.fail("Unterminated string escape");
       const escaped = this.source[this.index++];
       const simple: Record<string, string> = {
         '"': '"',
@@ -208,7 +227,9 @@ class ValueParser {
   }
 
   private parseNumber(): number {
-    const match = this.source.slice(this.index).match(/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/);
+    const match = this.source
+      .slice(this.index)
+      .match(/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/);
     if (!match) this.fail("Invalid number");
     this.index += match[0].length;
     const value = Number(match[0]);
@@ -217,7 +238,9 @@ class ValueParser {
   }
 
   private parseIdentifier(): string {
-    const match = this.source.slice(this.index).match(/^[A-Za-z_$][A-Za-z0-9_$-]*/);
+    const match = this.source
+      .slice(this.index)
+      .match(/^[A-Za-z_$][A-Za-z0-9_$-]*/);
     if (!match) this.fail("Expected an object property name");
     this.index += match[0].length;
     return match[0];
@@ -225,14 +248,16 @@ class ValueParser {
 
   private parseHtml(): HtmlLiteral {
     this.index += 4;
-    if (this.source[this.index] !== "`") this.fail("html must be followed by a template literal");
+    if (this.source[this.index] !== "`")
+      this.fail("html must be followed by a template literal");
     this.index++;
     let result = "";
     while (this.index < this.source.length) {
       const char = this.source[this.index++];
       if (char === "`") return html(result);
       if (char === "\\") {
-        if (this.index >= this.source.length) this.fail("Unterminated HTML literal escape");
+        if (this.index >= this.source.length)
+          this.fail("Unterminated HTML literal escape");
         const escaped = this.source[this.index++];
         if (escaped === "`" || escaped === "\\") {
           result += escaped;
@@ -251,7 +276,8 @@ class ValueParser {
 
   private keyword<T extends boolean | null>(word: string, value: T): T {
     const next = this.source[this.index + word.length];
-    if (next && /[A-Za-z0-9_$]/.test(next)) this.fail(`Invalid token beginning with ${word}`);
+    if (next && /[A-Za-z0-9_$]/.test(next))
+      this.fail(`Invalid token beginning with ${word}`);
     this.index += word.length;
     return value;
   }
@@ -275,7 +301,8 @@ class ValueParser {
   }
 
   private expect(value: string): void {
-    if (!this.source.startsWith(value, this.index)) this.fail(`Expected ${JSON.stringify(value)}`);
+    if (!this.source.startsWith(value, this.index))
+      this.fail(`Expected ${JSON.stringify(value)}`);
     this.index += value.length;
   }
 
@@ -313,10 +340,13 @@ function skipRawHtmlRegion(source: string, start: number): number | null {
   return match ? match.index + match[0].length : source.length;
 }
 
-function parseQuotedAttribute(source: string, index: number): { value: string; end: number } {
+function parseQuotedAttribute(
+  source: string,
+  index: number,
+): { value: string; end: number } {
   const quote = source[index];
   if (quote !== '"' && quote !== "'") {
-    throw new ComponentSourceSyntaxError("Component type must be quoted", index);
+    throw new ComponentSourceSyntaxError("Component id must be quoted", index);
   }
   let cursor = index + 1;
   let value = "";
@@ -329,7 +359,7 @@ function parseQuotedAttribute(source: string, index: number): { value: string; e
       value += char;
     }
   }
-  throw new ComponentSourceSyntaxError("Unterminated Component type", index);
+  throw new ComponentSourceSyntaxError("Unterminated Component id", index);
 }
 
 function parseReferenceAt(
@@ -338,49 +368,167 @@ function parseReferenceAt(
   budget: { nodes: number },
 ): ComponentReference {
   let index = start + "<Component".length;
-  let type: string | undefined;
+  let id: string | undefined;
   let data: Record<string, ComponentSourceValue> | undefined;
 
   while (index < source.length) {
     while (/\s/.test(source[index] ?? "")) index++;
     if (source.startsWith("/>", index)) {
       index += 2;
-      if (type === undefined) throw new ComponentSourceSyntaxError("Component type is required", index);
-      if (data === undefined) throw new ComponentSourceSyntaxError("Component data is required", index);
-      return { type, data, start, end: index, raw: source.slice(start, index) };
+      if (id === undefined)
+        throw new ComponentSourceSyntaxError("Component id is required", index);
+      if (data === undefined)
+        throw new ComponentSourceSyntaxError(
+          "Component data is required",
+          index,
+        );
+      return { id, data, start, end: index, raw: source.slice(start, index) };
     }
     const nameMatch = source.slice(index).match(/^[A-Za-z][A-Za-z0-9-]*/);
-    if (!nameMatch) throw new ComponentSourceSyntaxError("Expected Component attribute or />", index);
+    if (!nameMatch)
+      throw new ComponentSourceSyntaxError(
+        "Expected Component attribute or />",
+        index,
+      );
     const name = nameMatch[0];
     index += name.length;
     while (/\s/.test(source[index] ?? "")) index++;
-    if (source[index] !== "=") throw new ComponentSourceSyntaxError(`Expected = after ${name}`, index);
+    if (source[index] !== "=")
+      throw new ComponentSourceSyntaxError(`Expected = after ${name}`, index);
     index++;
     while (/\s/.test(source[index] ?? "")) index++;
 
-    if (name === "type") {
-      if (type !== undefined) throw new ComponentSourceSyntaxError("Duplicate Component type", index);
+    if (name === "id" || name === "type") {
+      if (id !== undefined)
+        throw new ComponentSourceSyntaxError("Duplicate Component id", index);
       const parsed = parseQuotedAttribute(source, index);
-      type = parsed.value;
+      id = parsed.value;
       index = parsed.end;
     } else if (name === "data") {
-      if (data !== undefined) throw new ComponentSourceSyntaxError("Duplicate Component data", index);
-      if (source[index] !== "{") throw new ComponentSourceSyntaxError("Component data must use data={{...}}", index);
+      if (data !== undefined)
+        throw new ComponentSourceSyntaxError("Duplicate Component data", index);
+      if (source[index] !== "{")
+        throw new ComponentSourceSyntaxError(
+          "Component data must use data={{...}}",
+          index,
+        );
       const parser = new ValueParser(source, index + 1, budget);
       const value = parser.parse();
-      if (Array.isArray(value) || value === null || typeof value !== "object" || isHtmlLiteral(value)) {
-        throw new ComponentSourceSyntaxError("Component data root must be an object", index + 1);
+      if (
+        Array.isArray(value) ||
+        value === null ||
+        typeof value !== "object" ||
+        isHtmlLiteral(value)
+      ) {
+        throw new ComponentSourceSyntaxError(
+          "Component data root must be an object",
+          index + 1,
+        );
       }
       parser.skipWhitespace();
       index = parser.position;
-      if (source[index] !== "}") throw new ComponentSourceSyntaxError("Expected closing JSX brace for data", index);
+      if (source[index] !== "}")
+        throw new ComponentSourceSyntaxError(
+          "Expected closing JSX brace for data",
+          index,
+        );
       index++;
       data = value;
     } else {
-      throw new ComponentSourceSyntaxError(`Unsupported Component attribute ${name}`, index - name.length);
+      throw new ComponentSourceSyntaxError(
+        `Unsupported Component attribute ${name}`,
+        index - name.length,
+      );
     }
   }
-  throw new ComponentSourceSyntaxError("Unterminated Component reference", start);
+  throw new ComponentSourceSyntaxError(
+    "Unterminated Component reference",
+    start,
+  );
+}
+
+function parseTagReferenceAt(
+  source: string,
+  start: number,
+  identity: ComponentTagIdentity,
+  budget: { nodes: number },
+): ComponentReference {
+  let index = start + identity.tag.length + 1;
+  let data: Record<string, ComponentSourceValue> | undefined;
+
+  while (index < source.length) {
+    while (/\s/.test(source[index] ?? "")) index++;
+    if (source.startsWith("/>", index)) {
+      index += 2;
+      return {
+        id: identity.id,
+        data: data ?? {},
+        start,
+        end: index,
+        raw: source.slice(start, index),
+      };
+    }
+    const nameMatch = source.slice(index).match(/^[A-Za-z][A-Za-z0-9-]*/);
+    if (!nameMatch) {
+      throw new ComponentSourceSyntaxError(
+        `Expected ${identity.tag} data or />`,
+        index,
+      );
+    }
+    const name = nameMatch[0];
+    index += name.length;
+    while (/\s/.test(source[index] ?? "")) index++;
+    if (source[index] !== "=") {
+      throw new ComponentSourceSyntaxError(`Expected = after ${name}`, index);
+    }
+    index++;
+    while (/\s/.test(source[index] ?? "")) index++;
+    if (name !== "data") {
+      throw new ComponentSourceSyntaxError(
+        `Unsupported ${identity.tag} attribute ${name}`,
+        index - name.length,
+      );
+    }
+    if (data !== undefined) {
+      throw new ComponentSourceSyntaxError(
+        `Duplicate ${identity.tag} data`,
+        index,
+      );
+    }
+    if (source[index] !== "{") {
+      throw new ComponentSourceSyntaxError(
+        `${identity.tag} data must use data={{...}}`,
+        index,
+      );
+    }
+    const parser = new ValueParser(source, index + 1, budget);
+    const value = parser.parse();
+    if (
+      Array.isArray(value) ||
+      value === null ||
+      typeof value !== "object" ||
+      isHtmlLiteral(value)
+    ) {
+      throw new ComponentSourceSyntaxError(
+        `${identity.tag} data root must be an object`,
+        index + 1,
+      );
+    }
+    parser.skipWhitespace();
+    index = parser.position;
+    if (source[index] !== "}") {
+      throw new ComponentSourceSyntaxError(
+        `Expected closing JSX brace for ${identity.tag} data`,
+        index,
+      );
+    }
+    index++;
+    data = value;
+  }
+  throw new ComponentSourceSyntaxError(
+    `Unterminated ${identity.tag} reference`,
+    start,
+  );
 }
 
 export function parseArticleSource(source: string): ParsedArticleSource {
@@ -417,12 +565,17 @@ export function parseArticleSource(source: string): ParsedArticleSource {
   return { source, references };
 }
 
-export function unwrapComponentSourceData(value: ComponentSourceValue): unknown {
+export function unwrapComponentSourceData(
+  value: ComponentSourceValue,
+): unknown {
   if (isHtmlLiteral(value)) return value.value;
   if (Array.isArray(value)) return value.map(unwrapComponentSourceData);
   if (value && typeof value === "object") {
     return Object.fromEntries(
-      Object.entries(value).map(([key, child]) => [key, unwrapComponentSourceData(child)]),
+      Object.entries(value).map(([key, child]) => [
+        key,
+        unwrapComponentSourceData(child),
+      ]),
     );
   }
   return value;
@@ -441,11 +594,16 @@ function serializeValue(
   if (schema?.type === "html" && typeof value === "string") {
     return `html\`${escapeHtmlLiteral(value)}\``;
   }
-  if (value === null || typeof value === "string" || typeof value === "boolean") {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean"
+  ) {
     return JSON.stringify(value);
   }
   if (typeof value === "number") {
-    if (!Number.isFinite(value)) throw new TypeError("Component data numbers must be finite");
+    if (!Number.isFinite(value))
+      throw new TypeError("Component data numbers must be finite");
     return String(value);
   }
   const indent = "  ".repeat(depth);
@@ -454,7 +612,10 @@ function serializeValue(
     if (value.length === 0) return "[]";
     const childSchema = schema?.type === "array" ? schema.items : undefined;
     return `[\n${value
-      .map((item) => `${childIndent}${serializeValue(item, childSchema, depth + 1)}`)
+      .map(
+        (item) =>
+          `${childIndent}${serializeValue(item, childSchema, depth + 1)}`,
+      )
       .join(",\n")}\n${indent}]`;
   }
   if (value && typeof value === "object") {
@@ -472,20 +633,94 @@ function serializeValue(
 }
 
 export function serializeComponentReference(
-  input: Pick<ComponentReference, "type" | "data"> | { type: string; data: ComponentData },
+  input:
+    | Pick<ComponentReference, "id" | "data">
+    | { id: string; data: ComponentData },
   schema?: ComponentSchema,
 ): string {
-  return `<Component type=${JSON.stringify(input.type)} data={${serializeValue(input.data, schema, 0)}} />`;
+  return `<Component id=${JSON.stringify(input.id)} data={${serializeValue(input.data, schema, 0)}} />`;
 }
 
-export function canonicalizeComponentReferences(
+export function serializeComponentTagReference(
+  input: Pick<ComponentTagIdentity, "tag"> & { data: ComponentData },
+  schema?: ComponentSchema,
+): string {
+  if (Object.keys(input.data).length === 0) return `<${input.tag} />`;
+  return `<${input.tag} data={${serializeValue(input.data, schema, 0)}} />`;
+}
+
+/** Converts user/model-facing Component tags to stable internal references. */
+export function resolveComponentTagReferences(
   source: string,
-  schemaLookup?: (type: string) => ComponentSchema | undefined,
+  resolveTag: (tag: string) => ComponentTagIdentity | null | undefined,
+): string {
+  const replacements: ComponentReference[] = [];
+  const budget = { nodes: 0 };
+  let index = 0;
+  while (index < source.length) {
+    const next = source.indexOf("<", index);
+    if (next < 0) break;
+    const rawEnd = skipRawHtmlRegion(source, next);
+    if (rawEnd !== null) {
+      index = rawEnd;
+      continue;
+    }
+    const match = source.slice(next).match(/^<([A-Z][A-Za-z0-9]*)(?=\s|\/?>)/);
+    const tag = match?.[1];
+    if (!tag || tag === "Component") {
+      index = next + 1;
+      continue;
+    }
+    const identity = resolveTag(tag);
+    if (!identity) {
+      throw new ComponentSourceSyntaxError(
+        `Unknown Component tag ${tag}`,
+        next,
+      );
+    }
+    const reference = parseTagReferenceAt(source, next, identity, budget);
+    replacements.push(reference);
+    index = reference.end;
+  }
+
+  let result = source;
+  for (const reference of [...replacements].reverse()) {
+    const replacement = serializeComponentReference(reference);
+    result = `${result.slice(0, reference.start)}${replacement}${result.slice(reference.end)}`;
+  }
+  return result;
+}
+
+/** Converts stable internal references to import-free Component tags. */
+export function displayComponentTagReferences(
+  source: string,
+  resolveId: (id: string) => ComponentTagIdentity | null | undefined,
 ): string {
   const { references } = parseArticleSource(source);
   let result = source;
   for (const reference of [...references].reverse()) {
-    const replacement = serializeComponentReference(reference, schemaLookup?.(reference.type));
+    const identity = resolveId(reference.id);
+    if (!identity) continue;
+    const replacement = serializeComponentTagReference(
+      { tag: identity.tag, data: reference.data },
+      identity.schema,
+    );
+    result = `${result.slice(0, reference.start)}${replacement}${result.slice(reference.end)}`;
+  }
+  return result;
+}
+
+export function canonicalizeComponentReferences(
+  source: string,
+  schemaLookup?: (id: string) => ComponentSchema | undefined,
+): string {
+  const { references } = parseArticleSource(source);
+  let result = source;
+  for (const reference of [...references].reverse()) {
+    const replacement = serializeComponentReference(
+      reference,
+      schemaLookup?.(reference.id),
+    );
     result = `${result.slice(0, reference.start)}${replacement}${result.slice(reference.end)}`;
   }
   return result;

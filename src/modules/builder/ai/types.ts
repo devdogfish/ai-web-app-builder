@@ -44,7 +44,7 @@ export type SelectedUploadExtract = Readonly<{
 export type ArticleEnvironmentContext = Readonly<BuilderEnvironment>;
 
 export type ArticleModelRequest = Readonly<{
-  /** Canonical Article Source. May contain managed Component directives. */
+  /** Model-facing Article Source. May contain import-free Component Tags. */
   currentArticleHtml: string;
   currentPrompt: string;
   selectedUploadExtracts?: readonly SelectedUploadExtract[];
@@ -60,7 +60,7 @@ export type ArticleModelRequest = Readonly<{
 export type ArticleModelResult =
   | Readonly<{
       action: "load_components";
-      types: readonly string[];
+      tags: readonly string[];
     }>
   | Readonly<{
       action: "answer";

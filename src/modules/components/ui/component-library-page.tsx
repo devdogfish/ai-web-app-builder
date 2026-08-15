@@ -5,27 +5,32 @@ import { useState, useTransition } from "react";
 import {
   ArrowLeftIcon,
   BracesIcon,
+  EyeIcon,
   PencilIcon,
   PlusIcon,
   Trash2Icon,
-  InfoIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import {
-  Alert,
-  AlertDescription,
-  AlertTitle,
-} from "@/modules/builder/ui/alert";
+  SourceEditor,
+  type SourceEditorDiagnostic,
+} from "@/modules/builder/components/source-editor";
 import {
   createComponentAction,
   deleteComponentAction,
+  diagnoseComponentSourceAction,
+  previewComponentAction,
   updateComponentAction,
 } from "@/modules/components/server/actions";
 import type {
+  ComponentAuthoringPreview,
+  ComponentData,
   ComponentDefinition,
   ComponentDefinitionInput,
 } from "@/modules/components";
+import { formatComponentSource } from "@/modules/components/format-source";
+import { ComponentDataForm } from "@/modules/components/ui/component-data-form";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -63,74 +68,70 @@ import {
   FieldGroup,
   FieldLabel,
 } from "@/modules/builder/ui/field";
+import { Spinner } from "@/modules/builder/ui/spinner";
 import { Input } from "@/modules/builder/ui/input";
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "@/modules/builder/ui/tabs";
 import { Textarea } from "@/modules/builder/ui/textarea";
 
-const EMPTY_COMPONENT: EditorDraft = {
-  type: "",
-  description: "",
-  htmlTemplate: "",
-  schema: JSON.stringify(
-    {
-      type: "object",
-      properties: {},
-      required: [],
-      additionalProperties: false,
-    },
-    null,
-    2,
-  ),
-  uiHints: "{}",
-  defaultData: "{}",
-  sampleData: "{}",
+const EMPTY_NAME = "New Component";
+const EMPTY_DESCRIPTION =
+  "Describe when the Builder should use this Component.";
+const EMPTY_SOURCE = `type Props = {
+  title: string;
+  content: React.ReactNode;
 };
 
-type EditorDraft = {
-  type: string;
-  description: string;
-  htmlTemplate: string;
-  schema: string;
-  uiHints: string;
-  defaultData: string;
-  sampleData: string;
-};
+/** Describe when the Builder should use this Component. */
+export default function NewComponent({
+  title = "",
+  content = "",
+}: Props) {
+  return (
+    <section>
+      <h2>{title}</h2>
+      <div>{content}</div>
+    </section>
+  );
+}`;
 
 export function ComponentLibraryPage({
   initialDefinitions,
+  initialEditingId,
 }: {
   initialDefinitions: ComponentDefinition[];
+  initialEditingId?: string | null;
 }) {
   const [definitions, setDefinitions] = useState(initialDefinitions);
   const [editing, setEditing] = useState<ComponentDefinition | "new" | null>(
-    null,
+    () =>
+      initialDefinitions.find(
+        (definition) => definition.id === initialEditingId,
+      ) ?? null,
   );
   const [deleting, setDeleting] = useState<ComponentDefinition | null>(null);
   const [pending, startTransition] = useTransition();
 
-  function save(input: ComponentDefinitionInput, originalType: string | null) {
+  function save(
+    input: ComponentDefinitionInput,
+    originalId: string | null,
+    closeAfterSave: boolean,
+  ) {
     startTransition(async () => {
-      const result = originalType
-        ? await updateComponentAction(originalType, input)
+      const result = originalId
+        ? await updateComponentAction(originalId, input)
         : await createComponentAction(input);
       if (!result.ok) {
         toast.error(result.error);
         return;
       }
-      setDefinitions(result.data);
-      setEditing(null);
-      toast.success(originalType ? "Component updated." : "Component created.");
+      setDefinitions(result.data.definitions);
+      setEditing(closeAfterSave ? null : result.data.saved);
+      toast.success(originalId ? "Component updated." : "Component created.");
     });
   }
 
   function remove(definition: ComponentDefinition) {
     startTransition(async () => {
-      const result = await deleteComponentAction(definition.type);
+      const result = await deleteComponentAction(definition.id);
       if (!result.ok) {
         toast.error(result.error);
         return;
@@ -158,7 +159,7 @@ export function ComponentLibraryPage({
                 Component Library
               </h1>
               <p className="text-sm text-muted-foreground">
-                Reusable, self-contained article HTML.
+                Typed TSX compiled into standalone article HTML.
               </p>
             </div>
           </div>
@@ -174,7 +175,7 @@ export function ComponentLibraryPage({
           <div>
             <h2 className="text-base font-medium">Available Components</h2>
             <p className="text-sm text-muted-foreground">
-              The Builder loads their data fields only when needed.
+              Props become the visual fields Article Editors use.
             </p>
           </div>
           <Badge variant="outline">
@@ -189,7 +190,7 @@ export function ComponentLibraryPage({
               <BracesIcon className="size-8 text-muted-foreground" />
               <CardTitle>No Components yet</CardTitle>
               <CardDescription>
-                Add a finished HTML snippet and define the data it accepts.
+                Add one self-contained TSX file.
               </CardDescription>
             </CardHeader>
             <CardFooter className="border-0 bg-transparent p-0">
@@ -203,7 +204,7 @@ export function ComponentLibraryPage({
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             {definitions.map((definition) => (
               <ComponentCard
-                key={definition.type}
+                key={definition.id}
                 definition={definition}
                 disabled={pending}
                 onEdit={() => setEditing(definition)}
@@ -215,7 +216,7 @@ export function ComponentLibraryPage({
       </section>
 
       <ComponentEditorDialog
-        key={editing === "new" ? "new" : editing?.type}
+        key={editing === "new" ? "new" : editing?.id}
         definition={editing === "new" ? null : editing}
         open={editing !== null}
         pending={pending}
@@ -232,11 +233,9 @@ export function ComponentLibraryPage({
             <AlertDialogMedia>
               <Trash2Icon />
             </AlertDialogMedia>
-            <AlertDialogTitle>Delete {deleting?.type}?</AlertDialogTitle>
+            <AlertDialogTitle>Delete {deleting?.name}?</AlertDialogTitle>
             <AlertDialogDescription>
-              Every managed use will first be replaced with its generated HTML.
-              Those articles keep their appearance, but the HTML will no longer
-              track this Component.
+              Managed uses become standalone HTML before deletion.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -254,7 +253,6 @@ export function ComponentLibraryPage({
     </main>
   );
 }
-
 function ComponentCard({
   definition,
   disabled,
@@ -266,26 +264,23 @@ function ComponentCard({
   onEdit: () => void;
   onDelete: () => void;
 }) {
-  const propertyCount = Object.keys(
-    (definition.schema as { properties?: object }).properties ?? {},
-  ).length;
-
+  const propertyCount = Object.keys(definition.schema.properties).length;
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="font-mono">{definition.type}</CardTitle>
+        <CardTitle>{definition.name}</CardTitle>
         <CardDescription className="line-clamp-2">
           {definition.description}
         </CardDescription>
         <CardAction>
           <Badge variant="secondary">
-            {propertyCount} {propertyCount === 1 ? "field" : "fields"}
+            {propertyCount} {propertyCount === 1 ? "prop" : "props"}
           </Badge>
         </CardAction>
       </CardHeader>
       <CardContent>
-        <pre className="max-h-24 overflow-hidden rounded-lg bg-muted p-3 text-xs whitespace-pre-wrap text-muted-foreground">
-          {definition.htmlTemplate}
+        <pre className="max-h-28 overflow-hidden rounded-lg bg-muted p-3 text-xs whitespace-pre-wrap text-muted-foreground">
+          {definition.source}
         </pre>
       </CardContent>
       <CardFooter className="justify-end gap-2">
@@ -320,252 +315,262 @@ function ComponentEditorDialog({
   onOpenChange: (open: boolean) => void;
   onSave: (
     input: ComponentDefinitionInput,
-    originalType: string | null,
+    originalId: string | null,
+    closeAfterSave: boolean,
   ) => void;
 }) {
-  const [draft, setDraft] = useState<EditorDraft>(() =>
-    definition ? definitionToDraft(definition) : EMPTY_COMPONENT,
+  const [name, setName] = useState(definition?.name ?? EMPTY_NAME);
+  const [description, setDescription] = useState(
+    definition?.description ?? EMPTY_DESCRIPTION,
   );
+  const [source, setSource] = useState(definition?.source ?? EMPTY_SOURCE);
+  const [preview, setPreview] = useState<ComponentAuthoringPreview | null>(
+    null,
+  );
+  const [previewData, setPreviewData] = useState<ComponentData>({});
+  const [previewing, startPreview] = useTransition();
+  const [formatting, startFormatting] = useTransition();
   const [error, setError] = useState<string | null>(null);
-  const editing = definition !== null;
+
+  function inspect() {
+    startPreview(async () => {
+      const formatted = await formatSource(source);
+      if (formatted === null) return;
+      const result = await previewComponentAction({
+        name,
+        description,
+        source: formatted,
+      });
+      if (!result.ok) {
+        setPreview(null);
+        setError(result.error);
+        return;
+      }
+      setSource(result.data.source);
+      setPreview(result.data);
+      setPreviewData(result.data.defaultData);
+      setError(null);
+    });
+  }
+
+  function formatOnly() {
+    startFormatting(async () => {
+      await formatSource(source);
+    });
+  }
 
   function submit() {
-    try {
-      const type = draft.type.trim();
-      if (!/^[a-z][a-z0-9-]*$/.test(type)) {
-        throw new Error(
-          "Component Type must use lowercase letters, numbers, and hyphens.",
-        );
-      }
-      if (!draft.description.trim())
-        throw new Error("Description is required.");
-      if (!draft.htmlTemplate.trim())
-        throw new Error("HTML snippet is required.");
+    void saveSource(source, true);
+  }
 
-      const input = {
-        type,
-        description: draft.description.trim(),
-        htmlTemplate: draft.htmlTemplate,
-        schema: parseJson(draft.schema, "Schema"),
-        uiHints: parseJson(draft.uiHints, "UI hints"),
-        defaultData: parseJson(draft.defaultData, "Default data"),
-        sampleData: parseJson(draft.sampleData, "Sample data"),
-      } as ComponentDefinitionInput;
+  async function saveSource(value: string, closeAfterSave: boolean) {
+    if (pending || previewing || formatting) return;
+    if (!name.trim() || !description.trim() || !value.trim()) {
+      setError("Name, Description, and Component Source are required.");
+      return;
+    }
+    const formatted = await formatSource(value);
+    if (formatted === null) return;
+    onSave(
+      { name, description, source: formatted },
+      definition?.id ?? null,
+      closeAfterSave,
+    );
+  }
+
+  async function formatSource(value: string): Promise<string | null> {
+    try {
+      const formatted = await formatComponentSource(value);
+      setSource(formatted);
+      setPreview(null);
       setError(null);
-      onSave(input, definition?.type ?? null);
-    } catch (caught) {
-      setError((caught as Error).message);
+      return formatted;
+    } catch (formatError) {
+      setPreview(null);
+      setError(errorMessage(formatError));
+      return null;
     }
   }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-3xl">
+      <DialogContent className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-6xl">
         <DialogHeader>
           <DialogTitle>
-            {editing ? `Edit ${definition.type}` : "Create Component"}
+            {definition ? `Edit ${definition.name}` : "Create Component"}
           </DialogTitle>
           <DialogDescription>
-            Paste one finished, self-contained HTML snippet, then describe its
-            data inputs. Inline style and script tags are supported.
+            Write one typed TSX Component. No imports, JSON schema, React hooks,
+            or external runtime.
           </DialogDescription>
         </DialogHeader>
 
-        <Tabs defaultValue="definition">
-          <TabsList>
-            <TabsTrigger value="definition">Definition</TabsTrigger>
-            <TabsTrigger value="data">Data contract</TabsTrigger>
-          </TabsList>
-          <TabsContent value="definition" className="pt-2">
-            <Alert>
-              <InfoIcon />
-              <AlertTitle>Bind data inside the snippet</AlertTitle>
-              <AlertDescription>
-                Use <code>{"{{title}}"}</code> for escaped values,{" "}
-                <code>{"{{{content}}}"}</code> for schema fields typed as HTML,
-                and <code>{"{{#each items}}…{{/each}}"}</code> for repeatable
-                arrays.
-              </AlertDescription>
-            </Alert>
-            <FieldGroup>
-              <Field>
-                <FieldLabel htmlFor="component-type">Component Type</FieldLabel>
-                <Input
-                  id="component-type"
-                  value={draft.type}
-                  disabled={editing || pending}
-                  placeholder="tabs"
-                  onChange={(event) =>
-                    setDraft((current) => ({
-                      ...current,
-                      type: event.target.value,
-                    }))
-                  }
-                />
-                <FieldDescription>
-                  Unique lowercase name used in the Article Source reference.
-                </FieldDescription>
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="component-description">
-                  Description
-                </FieldLabel>
-                <Textarea
-                  id="component-description"
-                  value={draft.description}
-                  disabled={pending}
-                  placeholder="Interactive labeled content panels."
-                  onChange={(event) =>
-                    setDraft((current) => ({
-                      ...current,
-                      description: event.target.value,
-                    }))
-                  }
-                />
-                <FieldDescription>
-                  Short enough to include in the LLM&apos;s Component index.
-                </FieldDescription>
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="component-html">HTML snippet</FieldLabel>
-                <Textarea
-                  id="component-html"
-                  value={draft.htmlTemplate}
-                  disabled={pending}
-                  spellCheck={false}
-                  className="min-h-72 font-mono text-xs"
-                  placeholder={
-                    '<section class="tabs">…</section>\n<style>…</style>\n<script>…</script>'
-                  }
-                  onChange={(event) =>
-                    setDraft((current) => ({
-                      ...current,
-                      htmlTemplate: event.target.value,
-                    }))
-                  }
-                />
-                <FieldDescription>
-                  No external component runtime is added. Handoff receives this
-                  rendered as ordinary HTML.
-                </FieldDescription>
-              </Field>
-            </FieldGroup>
-          </TabsContent>
-          <TabsContent value="data" className="pt-2">
-            <FieldGroup>
-              <JsonEditorField
-                id="component-schema"
-                label="Schema"
-                description="Strict Component prop schema. Supports string, html, image, number, boolean, choice, object, and array fields."
-                value={draft.schema}
+        <FieldGroup>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field>
+              <FieldLabel htmlFor="component-name">Name</FieldLabel>
+              <Input
+                id="component-name"
+                value={name}
                 disabled={pending}
-                onChange={(schema) =>
-                  setDraft((current) => ({ ...current, schema }))
-                }
+                onChange={(event) => {
+                  setName(event.target.value);
+                  setPreview(null);
+                  setError(null);
+                }}
               />
-              <JsonEditorField
-                id="component-ui-hints"
-                label="UI hints"
-                description="Labels, help text, placeholders, controls, and field order keyed by property path."
-                value={draft.uiHints}
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="component-description">
+                Description
+              </FieldLabel>
+              <Textarea
+                id="component-description"
+                value={description}
                 disabled={pending}
-                onChange={(uiHints) =>
-                  setDraft((current) => ({ ...current, uiHints }))
-                }
+                className="min-h-20"
+                onChange={(event) => {
+                  setDescription(event.target.value);
+                  setPreview(null);
+                  setError(null);
+                }}
               />
-              <div className="grid gap-5 sm:grid-cols-2">
-                <JsonEditorField
-                  id="component-default-data"
-                  label="Default data"
-                  description="Initial values for a new instance."
-                  value={draft.defaultData}
-                  disabled={pending}
-                  onChange={(defaultData) =>
-                    setDraft((current) => ({ ...current, defaultData }))
-                  }
-                />
-                <JsonEditorField
-                  id="component-sample-data"
-                  label="Sample data"
-                  description="Representative values for preview and LLM examples."
-                  value={draft.sampleData}
-                  disabled={pending}
-                  onChange={(sampleData) =>
-                    setDraft((current) => ({ ...current, sampleData }))
-                  }
-                />
-              </div>
-            </FieldGroup>
-          </TabsContent>
-        </Tabs>
+            </Field>
+          </div>
+          <Field data-invalid={Boolean(error)}>
+            <FieldLabel htmlFor="component-source">Component Source</FieldLabel>
+            <SourceEditor
+              id="component-source"
+              value={source}
+              readOnly={pending}
+              language="tsx"
+              ariaLabel="React TypeScript Component Source"
+              className="h-[30rem] min-h-[30rem] rounded-lg border text-xs"
+              onLint={lintComponentSource}
+              onSave={(value) => void saveSource(value, false)}
+              onChange={(value) => {
+                setSource(value);
+                setPreview(null);
+                setError(null);
+              }}
+            />
+            <FieldDescription>
+              Supported props: string, number, boolean, string unions,
+              React.ReactNode, ImageSource, objects, and arrays. Optional
+              defaults stay in normal TypeScript.
+            </FieldDescription>
+            {error ? <FieldError>{error}</FieldError> : null}
+          </Field>
+        </FieldGroup>
 
-        {error ? <FieldError>{error}</FieldError> : null}
+        {preview ? (
+          <div className="grid gap-4 lg:grid-cols-2">
+            <Card>
+              <CardHeader>
+                <CardTitle>Generated Article Editor</CardTitle>
+                <CardDescription>
+                  {preview.name} · {preview.description}
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ComponentDataForm
+                  schema={preview.schema}
+                  uiHints={preview.uiHints}
+                  value={previewData}
+                  onChange={setPreviewData}
+                />
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader>
+                <CardTitle>Rendered sample</CardTitle>
+                <CardDescription>
+                  Sandboxed standalone HTML output.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <iframe
+                  title="Component sample preview"
+                  sandbox="allow-scripts"
+                  className="h-80 w-full rounded-lg border bg-background"
+                  srcDoc={previewDocument(preview.html)}
+                />
+              </CardContent>
+            </Card>
+          </div>
+        ) : null}
 
-        <DialogFooter>
-          <Button
-            type="button"
-            variant="outline"
-            disabled={pending}
-            onClick={() => onOpenChange(false)}
-          >
-            Cancel
-          </Button>
-          <Button type="button" disabled={pending} onClick={submit}>
-            {editing ? "Save Component" : "Create Component"}
-          </Button>
+        <DialogFooter className="sm:justify-between">
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={pending || previewing || formatting}
+              onClick={formatOnly}
+            >
+              {formatting ? <Spinner data-icon="inline-start" /> : null}
+              Format
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={pending || previewing || formatting}
+              onClick={inspect}
+            >
+              {previewing ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <EyeIcon data-icon="inline-start" />
+              )}
+              Check and preview
+            </Button>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={pending}
+              onClick={() => onOpenChange(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={pending || previewing || formatting}
+              onClick={submit}
+            >
+              {pending ? <Spinner data-icon="inline-start" /> : null}
+              {definition ? "Save Component" : "Create Component"}
+            </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   );
 }
 
-function JsonEditorField({
-  id,
-  label,
-  description,
-  value,
-  disabled,
-  onChange,
-}: {
-  id: string;
-  label: string;
-  description: string;
-  value: string;
-  disabled: boolean;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <Field data-disabled={disabled || undefined}>
-      <FieldLabel htmlFor={id}>{label}</FieldLabel>
-      <Textarea
-        id={id}
-        value={value}
-        disabled={disabled}
-        spellCheck={false}
-        className="min-h-40 font-mono text-xs"
-        onChange={(event) => onChange(event.target.value)}
-      />
-      <FieldDescription>{description}</FieldDescription>
-    </Field>
-  );
+function previewDocument(html: string): string {
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline'"></head><body>${html}</body></html>`;
 }
 
-function definitionToDraft(definition: ComponentDefinition): EditorDraft {
-  return {
-    type: definition.type,
-    description: definition.description,
-    htmlTemplate: definition.htmlTemplate,
-    schema: JSON.stringify(definition.schema, null, 2),
-    uiHints: JSON.stringify(definition.uiHints, null, 2),
-    defaultData: JSON.stringify(definition.defaultData, null, 2),
-    sampleData: JSON.stringify(definition.sampleData, null, 2),
-  };
+function errorMessage(error: unknown): string {
+  return error instanceof Error
+    ? error.message
+    : "Could not format Component Source.";
 }
 
-function parseJson(value: string, label: string) {
-  try {
-    return JSON.parse(value);
-  } catch {
-    throw new Error(`${label} must be valid JSON.`);
-  }
+async function lintComponentSource(
+  source: string,
+): Promise<readonly SourceEditorDiagnostic[]> {
+  const result = await diagnoseComponentSourceAction(source);
+  if (result.ok) return result.data;
+  return [
+    {
+      from: 0,
+      to: Math.min(source.length, 1),
+      severity: "error",
+      message: result.error,
+      source: "Builder",
+    },
+  ];
 }

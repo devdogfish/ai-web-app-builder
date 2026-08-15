@@ -41,12 +41,12 @@ import { runBuilderRefinement } from "./refinement";
 import {
   compileBuilderPreviewSource,
   formatBuilderSourceDraft,
-  hasActiveComponents,
   prepareHistoricalSourceForRestore,
   prepareManagedSourceForSave,
 } from "./component-integration";
 import {
   assertValidBootstrapDocument,
+  assertValidArticleImageUploads,
   assertValidReferenceUploads,
   buildModelUploadText,
   fileExtension,
@@ -90,6 +90,10 @@ const imageMutationSchema = z.object({
   imageId: z.string().trim().min(1).max(256),
 });
 
+const imageOrderSchema = z.object({
+  orderedImageIds: z.array(z.string().trim().min(1).max(256)).max(1_000),
+});
+
 const articleSourceSchema = z
   .string()
   .max(BUILDER_DOCUMENT_LIMITS.maxSourceBytes);
@@ -97,7 +101,9 @@ const articleSourceSchema = z
 export async function formatBuilderArticleSourceAction(
   source: string,
 ): Promise<ActionResult<string>> {
-  return result(() => formatBuilderSourceDraft(articleSourceSchema.parse(source)));
+  return result(() =>
+    formatBuilderSourceDraft(articleSourceSchema.parse(source)),
+  );
 }
 
 export async function compileBuilderPreviewAction(
@@ -232,8 +238,7 @@ export async function runBuilderActionAction(
           initialMessage:
             input.method === "html-paste"
               ? {
-                  content:
-                    "Start with this HTML.",
+                  content: "Start with this HTML.",
                   uploads: [],
                 }
               : undefined,
@@ -337,7 +342,7 @@ export async function bootstrapBuilderFromFileAction(
         kind === "docx"
           ? "Start with this Word document."
           : "Start with this HTML document.";
-      const workspace = repository.sqlite.transaction(() => {
+      const workspace = repository.db.transaction(() => {
         const bootstrapped = repository.bootstrapArticle({
           article: articleRecord(environment),
           html: preparedSource.source,
@@ -377,7 +382,7 @@ export async function bootstrapBuilderFromFileAction(
           );
         }
         return bootstrapped;
-      })();
+      });
       const attachedStorageKeys = new Set(
         workspace.uploads.map((upload) => upload.storageKey),
       );
@@ -386,28 +391,6 @@ export async function bootstrapBuilderFromFileAction(
           .filter((upload) => !attachedStorageKeys.has(upload.storageKey))
           .map((upload) => getUploadStore().remove(upload.storageKey)),
       );
-      if (kind === "docx" && hasActiveComponents() && process.env.AI_PROVIDER) {
-        const docxUpload = workspace.uploads.find(
-          (upload) => upload.storageKey === sourceStorageKey,
-        );
-        if (docxUpload) {
-          try {
-            await runBuilderRefinement(
-              environment,
-              {
-                prompt:
-                  "Analyze the imported Word document using its structural extract and rendered pages. Apply managed Components only for clear, high-confidence matches. Keep ambiguous structures as ordinary HTML and mention each possible Component so I can confirm it.",
-                uploadIds: [docxUpload.id],
-              },
-              undefined,
-              { allowPreviouslyAttachedUploadIds: [docxUpload.id] },
-            );
-          } catch {
-            // The imported structural source remains usable and the refinement
-            // records a visible failure message when recognition cannot run.
-          }
-        }
-      }
     } catch (error) {
       await Promise.all(
         storedUploads.map((upload) =>
@@ -471,7 +454,7 @@ export async function convertArticleImageToJpegAction(
       nextSource,
       workspace.currentVersion.html,
     );
-    repository.sqlite.transaction(() => {
+    repository.db.transaction(() => {
       imageRepository.replaceBinary(environment.articleId, imageId, {
         name: image.originalName,
         mediaType: productionPrepared.image.mediaType,
@@ -482,8 +465,95 @@ export async function convertArticleImageToJpegAction(
         html: sourcePrepared.source,
         hostHtml: sourcePrepared.compiledHtml,
       });
-    })();
+    });
     await flushHostSync(environment);
+    return builderWorkspace(environment, repository);
+  });
+}
+
+export async function uploadBuilderArticleImagesAction(
+  reference: EnvironmentReference,
+  data: FormData,
+): Promise<ActionResult<BuilderWorkspace>> {
+  return result(async () => {
+    const environment = await resolveAuthorizedEnvironment(
+      environmentSchema.parse(reference),
+      "mutate",
+    );
+    const files = data
+      .getAll("files")
+      .filter((value): value is File => value instanceof File);
+    if (files.length === 0) {
+      throw new BuilderActionError("Select at least one image.");
+    }
+    assertValidArticleImageUploads(files);
+
+    const repository = getArticleRepository();
+    const workspace = repository.getWorkspace(environment.articleId);
+    if (!workspace) {
+      throw new BuilderActionError(
+        "Bootstrap the Builder Chat before adding Article Images.",
+      );
+    }
+    assertWorkspaceEnvironment(workspace, environment);
+
+    const prepared = await Promise.all(
+      files.map(async (file) =>
+        prepareNewArticleImage(environment.website, {
+          name: file.name,
+          mediaType: file.type || "application/octet-stream",
+          bytes: new Uint8Array(await file.arrayBuffer()),
+        }),
+      ),
+    );
+    new ArticleImageRepository(repository.sqlite).add(
+      environment.articleId,
+      prepared.map((item) => item.image),
+    );
+    return builderWorkspace(environment, repository);
+  });
+}
+
+export async function reorderBuilderArticleImagesAction(
+  reference: EnvironmentReference,
+  request: { orderedImageIds: string[] },
+): Promise<ActionResult<BuilderWorkspace>> {
+  return result(async () => {
+    const environment = await resolveAuthorizedEnvironment(
+      environmentSchema.parse(reference),
+      "mutate",
+    );
+    const { orderedImageIds } = imageOrderSchema.parse(request);
+    const repository = getArticleRepository();
+    const workspace = repository.getWorkspace(environment.articleId);
+    if (!workspace) throw new BuilderActionError("The Article is unavailable.");
+    assertWorkspaceEnvironment(workspace, environment);
+    new ArticleImageRepository(repository.sqlite).reorder(
+      environment.articleId,
+      orderedImageIds,
+    );
+    return builderWorkspace(environment, repository);
+  });
+}
+
+export async function removeBuilderArticleImageAction(
+  reference: EnvironmentReference,
+  request: { imageId: string },
+): Promise<ActionResult<BuilderWorkspace>> {
+  return result(async () => {
+    const environment = await resolveAuthorizedEnvironment(
+      environmentSchema.parse(reference),
+      "mutate",
+    );
+    const { imageId } = imageMutationSchema.parse(request);
+    const repository = getArticleRepository();
+    const workspace = repository.getWorkspace(environment.articleId);
+    if (!workspace) throw new BuilderActionError("The Article is unavailable.");
+    assertWorkspaceEnvironment(workspace, environment);
+    new ArticleImageRepository(repository.sqlite).remove(
+      environment.articleId,
+      imageId,
+    );
     return builderWorkspace(environment, repository);
   });
 }

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { BUILDER_UPLOAD_LIMITS } from "../config/builder";
 import {
   fileExtension,
+  validateArticleImageUploads,
   validateBootstrapDocument,
   validateReferenceUploads,
 } from "../uploads";
@@ -46,6 +47,22 @@ describe("upload validation", () => {
     ).toBe(true);
     expect(
       validateBootstrapDocument({ name: "article.pdf", size: 10 }).issues,
+    ).toContainEqual(
+      expect.objectContaining({ code: "unsupported_extension" }),
+    );
+  });
+
+  it("accepts image MIME types and known image extensions for Article Images", () => {
+    expect(
+      validateArticleImageUploads([
+        { name: "camera.raw", size: 10, type: "image/x-raw" },
+        { name: "photo.HEIC", size: 10, type: "" },
+      ]).valid,
+    ).toBe(true);
+    expect(
+      validateArticleImageUploads([
+        { name: "document.pdf", size: 10, type: "application/pdf" },
+      ]).issues,
     ).toContainEqual(
       expect.objectContaining({ code: "unsupported_extension" }),
     );

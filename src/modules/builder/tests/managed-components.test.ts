@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { prepareComponentDefinition } from "../../components/authoring";
 import type { ComponentDefinition } from "../../components/contracts";
 import {
   assertValidManagedArticleSource,
@@ -8,37 +9,36 @@ import {
 } from "../content";
 
 const tabs: ComponentDefinition = {
-  type: "tabs",
-  description: "Tabs",
-  htmlTemplate:
-    '<div class="tabs">{{#each tabs}}<section><h2>{{label}}</h2>{{{content}}}</section>{{/each}}</div>',
-  schema: {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      tabs: {
-        type: "array",
-        items: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            label: { type: "string" },
-            content: { type: "html" },
-          },
-          required: ["label", "content"],
-        },
-      },
-    },
-    required: ["tabs"],
-  },
-  uiHints: {},
-  defaultData: {},
-  sampleData: { tabs: [{ label: "One", content: "<p>Body</p>" }] },
+  ...prepareComponentDefinition({
+    source: `
+type Props = { tabs: Array<{ label: string; content: React.ReactNode }> };
+export default function Tabs({ tabs }: Props) {
+  return <div className="tabs">{tabs.map(tab => <section><h2>{tab.label}</h2>{tab.content}</section>)}</div>;
+}`,
+  }),
+  id: "tabs",
   createdAt: new Date(0),
   updatedAt: new Date(0),
   deletedAt: null,
 };
-const lookup = new Map([[tabs.type, tabs]]);
+const simpleQuote: ComponentDefinition = {
+  ...prepareComponentDefinition({
+    source: `
+type Props = { quote: string; attribution: string };
+/** A simple quote. */
+export default function SimpleQuote({ quote, attribution }: Props) {
+  return <blockquote><p>{quote}</p><p className="attribution">{attribution}</p></blockquote>;
+}`,
+  }),
+  id: "simple-quote",
+  createdAt: new Date(0),
+  updatedAt: new Date(0),
+  deletedAt: null,
+};
+const lookup = new Map([
+  [tabs.id, tabs],
+  [simpleQuote.id, simpleQuote],
+]);
 
 describe("managed Article Source", () => {
   it("formats surrounding HTML while preserving canonical Component data", async () => {
@@ -48,11 +48,9 @@ describe("managed Article Source", () => {
     const formatted = await formatManagedArticleSource(source, lookup);
 
     expect(formatted).toContain("<article>");
-    expect(formatted).toContain('<Component type="tabs"');
-    expect(formatted).toContain(
-      '"content": html`<a title="Example">Body</a>`',
-    );
-    assertValidManagedArticleSource(formatted, lookup);
+    expect(formatted).toContain('<Component id="tabs"');
+    expect(formatted).toContain('"content": html`<a title="Example">Body</a>`');
+    await assertValidManagedArticleSource(formatted, lookup);
   });
 
   it("compiles managed references to plain formatted HTML", async () => {
@@ -67,35 +65,50 @@ describe("managed Article Source", () => {
     expect(compiled).not.toContain("<Component");
   });
 
-  it("blocks unknown or invalid Component references", () => {
-    expect(() =>
+  it("lifts block Components out of paragraph wrappers before compilation", async () => {
+    const source = `<article>
+      <p><Component type="simple-quote" data={{ quote: "First", attribution: "One" }} /></p>
+      <p><Component type="simple-quote" data={{ quote: "Second", attribution: "Two" }} /></p>
+    </article>`;
+
+    const formatted = await formatManagedArticleSource(source, lookup);
+    const compiled = await compileManagedArticleSource(formatted, lookup);
+
+    expect(formatted).not.toMatch(/<p>\s*<Component/);
+    expect(formatted.match(/id="simple-quote"/g)).toHaveLength(2);
+    expect(compiled.match(/<blockquote>/g)).toHaveLength(2);
+    expect(compiled).not.toMatch(/<p>\s*<blockquote>/);
+  });
+
+  it("blocks unknown or invalid Component references", async () => {
+    await expect(
       assertValidManagedArticleSource(
         '<Component type="missing" data={{}} />',
         lookup,
       ),
-    ).toThrow("Unknown Component type missing");
-    expect(() =>
+    ).rejects.toThrow("Unknown Component id missing");
+    await expect(
       assertValidManagedArticleSource(
         '<Component type="tabs" data={{ tabs: [{ label: "One" }] }} />',
         lookup,
       ),
-    ).toThrow("content is required");
+    ).rejects.toThrow("content is required");
   });
 
-  it("allows data edits but blocks implicit detachment", () => {
+  it("allows data edits but blocks implicit detachment", async () => {
     const previous =
       '<Component type="tabs" data={{ tabs: [{ label: "One", content: html`<p>Before</p>` }] }} />';
     const updated =
       '<Component type="tabs" data={{ tabs: [{ label: "One", content: html`<p>After</p>` }] }} />';
-    expect(() =>
+    await expect(
       assertValidManagedArticleSource(updated, lookup, {
         previousSource: previous,
       }),
-    ).not.toThrow();
-    expect(() =>
+    ).resolves.toBeUndefined();
+    await expect(
       assertValidManagedArticleSource("<p>Detached</p>", lookup, {
         previousSource: previous,
       }),
-    ).toThrow("confirmed Detach action");
+    ).rejects.toThrow("confirmed Detach action");
   });
 });

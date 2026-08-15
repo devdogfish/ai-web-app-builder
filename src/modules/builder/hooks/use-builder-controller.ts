@@ -5,9 +5,13 @@ import { toast } from "sonner";
 
 import {
   bootstrapFromFile,
+  convertArticleImageToJpeg,
   fetchWorkspace,
   refineBuilder,
+  removeArticleImage,
+  reorderArticleImages,
   runBuilderAction,
+  uploadArticleImages,
   uploadReferences,
 } from "@/modules/builder/core/client";
 import type {
@@ -190,13 +194,62 @@ export function useBuilderController() {
     }
   };
 
+  const addArticleImages = async (files: File[]): Promise<boolean> => {
+    try {
+      const next = await uploadArticleImages(environment, files);
+      setWorkspace(next);
+      toast.success(
+        files.length === 1
+          ? "Image added to the article."
+          : `${files.length} images added to the article.`,
+      );
+      return true;
+    } catch (error) {
+      toast.error((error as Error).message);
+      return false;
+    }
+  };
+
+  const reorderImages = async (orderedImageIds: string[]): Promise<boolean> => {
+    try {
+      setWorkspace(await reorderArticleImages(environment, orderedImageIds));
+      return true;
+    } catch (error) {
+      toast.error((error as Error).message);
+      return false;
+    }
+  };
+
+  const removeImage = async (imageId: string): Promise<boolean> => {
+    try {
+      setWorkspace(await removeArticleImage(environment, imageId));
+      toast.success("Image removed.");
+      return true;
+    } catch (error) {
+      toast.error((error as Error).message);
+      return false;
+    }
+  };
+
+  const convertImageToJpeg = async (imageId: string): Promise<boolean> => {
+    try {
+      adopt(await convertArticleImageToJpeg(environment, imageId));
+      toast.success("Image converted to JPEG.");
+      return true;
+    } catch (error) {
+      toast.error((error as Error).message);
+      return false;
+    }
+  };
+
   const send = async (
     overridePrompt?: string,
     options: { includeRuntimeError?: boolean } = {},
   ) => {
     const requestPrompt = (overridePrompt ?? prompt).trim();
+    const requestUploadIds = [...selectedUploadIds];
     if (
-      !hasRefinementInput(requestPrompt, selectedUploadIds) ||
+      !hasRefinementInput(requestPrompt, requestUploadIds) ||
       generationAbortRef.current
     ) {
       return;
@@ -207,6 +260,7 @@ export function useBuilderController() {
     setGenerating(true);
     setStreamStatus("Thinking…");
     setPrompt("");
+    setSelectedUploadIds([]);
     const optimistic: BuilderMessage = {
       id: `pending-${Date.now()}`,
       role: "user",
@@ -214,7 +268,7 @@ export function useBuilderController() {
       content: requestPrompt,
       status: "complete",
       versionId: null,
-      uploadIds: selectedUploadIds,
+      uploadIds: requestUploadIds,
       errorCode: null,
       durationMs: null,
       thinkingMs: null,
@@ -231,7 +285,7 @@ export function useBuilderController() {
           environment,
           {
             prompt: requestPrompt,
-            uploadIds: selectedUploadIds,
+            uploadIds: requestUploadIds,
             runtimeError: options.includeRuntimeError
               ? (runtimeError ?? undefined)
               : undefined,
@@ -254,15 +308,26 @@ export function useBuilderController() {
         }
         return;
       }
+      setPrompt((current) => current || requestPrompt);
+      setSelectedUploadIds((current) =>
+        current.length > 0 ? current : requestUploadIds,
+      );
       try {
         const recovered = await fetchWorkspace(environment);
         adopt(recovered);
-        const failedRequest = [...recovered.messages]
-          .reverse()
+        const failedRequest = recovered.messages
+          .slice(messageCountBeforeRequest)
           .find((message) => message.role === "user");
-        setSelectedUploadIds(failedRequest?.uploadIds ?? []);
+        setPrompt(
+          (current) => current || failedRequest?.content || requestPrompt,
+        );
+        setSelectedUploadIds(
+          failedRequest?.uploadIds.length
+            ? failedRequest.uploadIds
+            : requestUploadIds,
+        );
       } catch {
-        // Preserve the optimistic state when state recovery is unavailable.
+        // Keep the submitted composer state available for a manual retry.
       }
       toast.error((error as Error).message);
     } finally {
@@ -309,6 +374,10 @@ export function useBuilderController() {
     bootstrap,
     bootstrapFile,
     addUploads,
+    addArticleImages,
+    reorderImages,
+    removeImage,
+    convertImageToJpeg,
     send,
     stop,
   };

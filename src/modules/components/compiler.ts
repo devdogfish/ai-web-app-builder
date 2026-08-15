@@ -1,10 +1,9 @@
 import type {
   ComponentData,
   ComponentDefinition,
-  ComponentFieldSchema,
   ComponentSchema,
 } from "./contracts";
-import { assertValidComponentData } from "./schema";
+import { renderSandboxedComponent } from "./sandbox";
 import {
   parseArticleSource,
   serializeComponentReference,
@@ -14,8 +13,8 @@ import {
 
 export type ComponentLookup =
   | ReadonlyMap<string, ComponentDefinition>
-  | ((type: string) => ComponentDefinition | null | undefined)
-  | { getForCompilation(type: string): ComponentDefinition | null };
+  | ((id: string) => ComponentDefinition | null | undefined)
+  | { getForCompilation(id: string): ComponentDefinition | null };
 
 export type ComponentSourceIssueCode =
   | "unknown_component"
@@ -27,10 +26,9 @@ export type ComponentSourceIssueCode =
 export interface ComponentSourceIssue {
   code: ComponentSourceIssueCode;
   message: string;
-  type: string;
+  id: string;
   offset: number;
 }
-
 export interface ComponentSourceValidation {
   valid: boolean;
   references: ComponentReference[];
@@ -41,7 +39,7 @@ export class ComponentCompilationError extends Error {
   constructor(
     public readonly code: ComponentSourceIssueCode | "reference_not_found",
     message: string,
-    public readonly type?: string,
+    public readonly id?: string,
     public readonly offset?: number,
   ) {
     super(message);
@@ -50,7 +48,6 @@ export class ComponentCompilationError extends Error {
 }
 
 export const MAX_COMPILED_ARTICLE_BYTES = 4 * 1024 * 1024;
-const MAX_TEMPLATE_NESTING_DEPTH = 32;
 
 class BoundedOutputWriter {
   private readonly chunks: string[] = [];
@@ -74,267 +71,81 @@ class BoundedOutputWriter {
   }
 }
 
-function lookupComponent(lookup: ComponentLookup, type: string): ComponentDefinition | null {
-  if (typeof lookup === "function") return lookup(type) ?? null;
-  if ("getForCompilation" in lookup) return lookup.getForCompilation(type);
-  return lookup.get(type) ?? null;
+function lookupComponent(
+  lookup: ComponentLookup,
+  id: string,
+): ComponentDefinition | null {
+  if (typeof lookup === "function") return lookup(id) ?? null;
+  if ("getForCompilation" in lookup) return lookup.getForCompilation(id);
+  return lookup.get(id) ?? null;
 }
 
-function deepMerge(defaults: unknown, provided: unknown): unknown {
-  if (
-    defaults &&
-    provided &&
-    typeof defaults === "object" &&
-    typeof provided === "object" &&
-    !Array.isArray(defaults) &&
-    !Array.isArray(provided)
-  ) {
-    const result: Record<string, unknown> = { ...(defaults as Record<string, unknown>) };
-    for (const [key, value] of Object.entries(provided as Record<string, unknown>)) {
-      result[key] = deepMerge(result[key], value);
-    }
-    return result;
-  }
-  return provided;
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-interface RenderContext {
-  value: unknown;
-  schema: ComponentFieldSchema;
-  index: number | null;
-  root: ComponentData;
-  rootSchema: ComponentSchema;
-}
-
-function resolvePath(
-  context: RenderContext,
-  path: string,
-): { value: unknown; schema: ComponentFieldSchema | undefined } {
-  if (path === "@index") return { value: context.index, schema: { type: "number", integer: true } };
-  let value: unknown;
-  let schema: ComponentFieldSchema | undefined;
-  let segments: string[];
-  if (path === "this" || path === ".") {
-    return { value: context.value, schema: context.schema };
-  }
-  if (path.startsWith("$.")) {
-    value = context.root;
-    schema = context.rootSchema;
-    segments = path.slice(2).split(".");
-  } else {
-    value = context.value;
-    schema = context.schema;
-    segments = path.split(".");
-  }
-  for (const segment of segments) {
-    if (!segment) return { value: undefined, schema: undefined };
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      return { value: undefined, schema: undefined };
-    }
-    value = (value as Record<string, unknown>)[segment];
-    schema = schema?.type === "object" ? schema.properties[segment] : undefined;
-  }
-  return { value, schema };
-}
-
-function findEachEnd(template: string, contentStart: number): { start: number; end: number } {
-  const tokenPattern = /{{\s*(#each\s+[^}]+|\/each)\s*}}/g;
-  tokenPattern.lastIndex = contentStart;
-  let depth = 1;
-  let match: RegExpExecArray | null;
-  while ((match = tokenPattern.exec(template))) {
-    if (match[1].startsWith("#each")) depth++;
-    else depth--;
-    if (depth === 0) return { start: match.index, end: tokenPattern.lastIndex };
-  }
-  throw new ComponentCompilationError("invalid_template", "Unclosed {{#each}} block.");
-}
-
-function scalarString(value: unknown, path: string): string {
-  if (value === null || value === undefined) return "";
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  throw new ComponentCompilationError(
-    "invalid_template",
-    `Template path ${path} resolves to structured data and cannot be interpolated directly.`,
-  );
-}
-
-function renderRange(
-  template: string,
-  context: RenderContext,
-  output: BoundedOutputWriter,
-  depth = 0,
-): void {
-  if (depth > MAX_TEMPLATE_NESTING_DEPTH) {
-    throw new ComponentCompilationError(
-      "invalid_template",
-      `Component template nesting exceeds ${MAX_TEMPLATE_NESTING_DEPTH} levels.`,
-    );
-  }
-  let cursor = 0;
-  while (cursor < template.length) {
-    const tokenStart = template.indexOf("{{", cursor);
-    if (tokenStart < 0) {
-      output.append(template.slice(cursor));
-      return;
-    }
-    output.append(template.slice(cursor, tokenStart));
-
-    if (template.startsWith("{{{", tokenStart)) {
-      const tokenEnd = template.indexOf("}}}", tokenStart + 3);
-      if (tokenEnd < 0) {
-        throw new ComponentCompilationError("invalid_template", "Unclosed raw template placeholder.");
-      }
-      const path = template.slice(tokenStart + 3, tokenEnd).trim();
-      const resolved = resolvePath(context, path);
-      if (resolved.schema?.type !== "html") {
-        throw new ComponentCompilationError(
-          "invalid_template",
-          `Raw placeholder ${path} must reference an html field.`,
-        );
-      }
-      output.append(scalarString(resolved.value, path));
-      cursor = tokenEnd + 3;
-      continue;
-    }
-
-    const tokenEnd = template.indexOf("}}", tokenStart + 2);
-    if (tokenEnd < 0) {
-      throw new ComponentCompilationError("invalid_template", "Unclosed template placeholder.");
-    }
-    const token = template.slice(tokenStart + 2, tokenEnd).trim();
-    if (token.startsWith("#each ")) {
-      const path = token.slice("#each ".length).trim();
-      const resolved = resolvePath(context, path);
-      if (!Array.isArray(resolved.value) || resolved.schema?.type !== "array") {
-        throw new ComponentCompilationError(
-          "invalid_template",
-          `Each path ${path} must reference an array field.`,
-        );
-      }
-      const arraySchema = resolved.schema;
-      const block = findEachEnd(template, tokenEnd + 2);
-      const inner = template.slice(tokenEnd + 2, block.start);
-      resolved.value.forEach((item, index) =>
-        renderRange(
-          inner,
-          {
-            ...context,
-            value: item,
-            schema: arraySchema.items,
-            index,
-          },
-          output,
-          depth + 1,
-        ),
-      );
-      cursor = block.end;
-      continue;
-    }
-    if (token === "/each") {
-      throw new ComponentCompilationError("invalid_template", "Unexpected {{/each}} block.");
-    }
-    const resolved = resolvePath(context, token);
-    if (!resolved.schema) {
-      throw new ComponentCompilationError("invalid_template", `Unknown template path ${token}.`);
-    }
-    output.append(escapeHtml(scalarString(resolved.value, token)));
-    cursor = tokenEnd + 2;
-  }
-}
-
-export function renderComponentHtml(
+export async function renderComponentHtml(
   definition: ComponentDefinition,
   sourceData: Record<string, unknown>,
   options: { maxOutputBytes?: number } = {},
-): string {
-  const output = new BoundedOutputWriter(
+): Promise<string> {
+  const html = await renderSandboxedComponent(definition, sourceData);
+  const writer = new BoundedOutputWriter(
     options.maxOutputBytes ?? MAX_COMPILED_ARTICLE_BYTES,
   );
-  renderComponentInto(definition, sourceData, output);
-  return output.toString();
+  writer.append(html);
+  return writer.toString();
 }
 
-function renderComponentInto(
+export async function validateComponentTemplate(
   definition: ComponentDefinition,
-  sourceData: Record<string, unknown>,
-  output: BoundedOutputWriter,
-): void {
-  const merged = deepMerge(definition.defaultData, sourceData) as ComponentData;
-  assertValidComponentData(definition.schema, merged);
-  renderRange(
-    definition.htmlTemplate,
-    {
-      value: merged,
-      schema: definition.schema,
-      index: null,
-      root: merged,
-      rootSchema: definition.schema,
-    },
-    output,
-  );
+): Promise<void> {
+  await renderComponentHtml(definition, definition.sampleData);
 }
 
-export function validateComponentTemplate(definition: ComponentDefinition): void {
-  renderComponentHtml(definition, definition.sampleData);
-}
-
-function compileReferenceInto(
+async function compileReference(
   reference: ComponentReference,
   lookup: ComponentLookup,
-  output: BoundedOutputWriter,
-): void {
-  const definition = lookupComponent(lookup, reference.type);
+  maxOutputBytes: number,
+): Promise<string> {
+  const definition = lookupComponent(lookup, reference.id);
   if (!definition) {
     throw new ComponentCompilationError(
       "unknown_component",
-      `Unknown Component type ${reference.type}.`,
-      reference.type,
+      `Unknown Component id ${reference.id}.`,
+      reference.id,
       reference.start,
     );
   }
   try {
-    renderComponentInto(
+    return await renderComponentHtml(
       definition,
       unwrapComponentSourceData(reference.data) as Record<string, unknown>,
-      output,
+      { maxOutputBytes },
     );
   } catch (error) {
     if (error instanceof ComponentCompilationError) throw error;
     throw new ComponentCompilationError(
       "invalid_data",
-      error instanceof Error ? error.message : `Invalid data for ${reference.type}.`,
-      reference.type,
+      error instanceof Error
+        ? error.message
+        : `Invalid Component ${reference.id}.`,
+      reference.id,
       reference.start,
     );
   }
 }
 
-export function validateArticleSourceComponents(
+export async function validateArticleSourceComponents(
   source: string,
   lookup: ComponentLookup,
   options: { allowDeleted?: boolean } = {},
-): ComponentSourceValidation {
+): Promise<ComponentSourceValidation> {
   const { references } = parseArticleSource(source);
   const issues: ComponentSourceIssue[] = [];
   for (const reference of references) {
-    const definition = lookupComponent(lookup, reference.type);
+    const definition = lookupComponent(lookup, reference.id);
     if (!definition) {
       issues.push({
         code: "unknown_component",
-        message: `Unknown Component type ${reference.type}.`,
-        type: reference.type,
+        message: `Unknown Component id ${reference.id}.`,
+        id: reference.id,
         offset: reference.start,
       });
       continue;
@@ -342,25 +153,29 @@ export function validateArticleSourceComponents(
     if (definition.deletedAt && !options.allowDeleted) {
       issues.push({
         code: "deleted_component",
-        message: `Component ${reference.type} has been deleted.`,
-        type: reference.type,
+        message: `Component ${definition.tag} has been deleted.`,
+        id: reference.id,
         offset: reference.start,
       });
       continue;
     }
     try {
-      renderComponentHtml(
+      await renderComponentHtml(
         definition,
         unwrapComponentSourceData(reference.data) as Record<string, unknown>,
       );
     } catch (error) {
       issues.push({
         code:
-          error instanceof ComponentCompilationError && error.code !== "reference_not_found"
+          error instanceof ComponentCompilationError &&
+          error.code !== "reference_not_found"
             ? error.code
             : "invalid_data",
-        message: error instanceof Error ? error.message : `Invalid Component ${reference.type}.`,
-        type: reference.type,
+        message:
+          error instanceof Error
+            ? error.message
+            : `Invalid Component ${definition.tag}.`,
+        id: reference.id,
         offset: reference.start,
       });
     }
@@ -368,19 +183,18 @@ export function validateArticleSourceComponents(
   return { valid: issues.length === 0, references, issues };
 }
 
-export function compileArticleSource(
+export async function compileArticleSource(
   source: string,
   lookup: ComponentLookup,
   options: { maxOutputBytes?: number } = {},
-): string {
+): Promise<string> {
   const { references } = parseArticleSource(source);
-  const output = new BoundedOutputWriter(
-    options.maxOutputBytes ?? MAX_COMPILED_ARTICLE_BYTES,
-  );
+  const maxOutputBytes = options.maxOutputBytes ?? MAX_COMPILED_ARTICLE_BYTES;
+  const output = new BoundedOutputWriter(maxOutputBytes);
   let cursor = 0;
   for (const reference of references) {
     output.append(source.slice(cursor, reference.start));
-    compileReferenceInto(reference, lookup, output);
+    output.append(await compileReference(reference, lookup, maxOutputBytes));
     cursor = reference.end;
   }
   output.append(source.slice(cursor));
@@ -392,12 +206,12 @@ export interface DetachComponentSelector {
   start?: number;
 }
 
-export function detachComponentReference(
+export async function detachComponentReference(
   source: string,
   selector: number | DetachComponentSelector,
   lookup: ComponentLookup,
   options: { maxOutputBytes?: number } = {},
-): string {
+): Promise<string> {
   const { references } = parseArticleSource(source);
   const resolved =
     typeof selector === "number"
@@ -406,36 +220,39 @@ export function detachComponentReference(
         ? references.find((reference) => reference.start === selector.start)
         : references[selector.index ?? -1];
   if (!resolved) {
-    throw new ComponentCompilationError("reference_not_found", "Component reference was not found.");
+    throw new ComponentCompilationError(
+      "reference_not_found",
+      "Component reference was not found.",
+    );
   }
-  const output = new BoundedOutputWriter(
-    options.maxOutputBytes ?? MAX_COMPILED_ARTICLE_BYTES,
-  );
+  const maxOutputBytes = options.maxOutputBytes ?? MAX_COMPILED_ARTICLE_BYTES;
+  const output = new BoundedOutputWriter(maxOutputBytes);
   output.append(source.slice(0, resolved.start));
-  compileReferenceInto(resolved, lookup, output);
+  output.append(await compileReference(resolved, lookup, maxOutputBytes));
   output.append(source.slice(resolved.end));
   return output.toString();
 }
 
-/** Expands only one Component type, preserving all other managed references. */
-export function materializeComponentType(
+/** Expands only one Component ID, preserving all other managed references. */
+export async function materializeComponentId(
   source: string,
-  type: string,
+  id: string,
   definition: ComponentDefinition,
   options: { maxOutputBytes?: number } = {},
-): string {
+): Promise<string> {
   const { references } = parseArticleSource(source);
-  const output = new BoundedOutputWriter(
-    options.maxOutputBytes ?? MAX_COMPILED_ARTICLE_BYTES,
-  );
+  const maxOutputBytes = options.maxOutputBytes ?? MAX_COMPILED_ARTICLE_BYTES;
+  const output = new BoundedOutputWriter(maxOutputBytes);
   let cursor = 0;
   for (const reference of references) {
     output.append(source.slice(cursor, reference.start));
-    if (reference.type === type) {
-      renderComponentInto(
-        definition,
-        unwrapComponentSourceData(reference.data) as Record<string, unknown>,
-        output,
+    if (reference.id === id) {
+      output.append(
+        await renderComponentHtml(
+          definition,
+          unwrapComponentSourceData(reference.data) as Record<string, unknown>,
+          { maxOutputBytes },
+        ),
       );
     } else {
       output.append(reference.raw);
@@ -447,9 +264,9 @@ export function materializeComponentType(
 }
 
 export function createComponentReference(
-  type: string,
+  id: string,
   data: ComponentData,
   schema?: ComponentSchema,
 ): string {
-  return serializeComponentReference({ type, data }, schema);
+  return serializeComponentReference({ id, data }, schema);
 }

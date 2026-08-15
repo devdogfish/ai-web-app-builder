@@ -17,10 +17,8 @@ describe("conversation stop control", () => {
   });
 
   it("keeps the prompt editable during generation", () => {
-    const promptInput = source.slice(
-      source.indexOf("<InputGroupTextarea"),
-      source.indexOf("</InputGroupTextarea>"),
-    );
+    const promptInput = source.match(/<InputGroupTextarea[\s\S]*?\/>/)?.[0];
+    expect(promptInput).toBeDefined();
     expect(promptInput).not.toContain("disabled={generating}");
   });
 });

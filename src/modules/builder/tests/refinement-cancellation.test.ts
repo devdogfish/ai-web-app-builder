@@ -10,6 +10,7 @@ import {
 
 import { createArticleModelFromEnv } from "../ai/server";
 import { ArticleModelError } from "../ai/types";
+import { ArticleImageRepository } from "../../article-images/repository";
 import { createArticleRepository, type ArticleWorkspace } from "../db";
 import type { BuilderEnvironment } from "../environment/types";
 
@@ -27,6 +28,7 @@ vi.mock("../core/server", () => ({
   toBuilderWorkspace: (
     environment: BuilderEnvironment,
     workspace: ArticleWorkspace | null,
+    articleImages: readonly unknown[] = [],
   ) => ({
     environment,
     needsBootstrap: !workspace,
@@ -59,7 +61,7 @@ vi.mock("../core/server", () => ({
         createdAt: version.createdAt.toISOString(),
       })) ?? [],
     uploads: [],
-    articleImages: [],
+    articleImages,
     compactMemoryTokenEstimate: 0,
     compactedThroughMessageId: null,
     hostSyncPending: false,
@@ -190,7 +192,7 @@ describe("Builder refinement cancellation", () => {
             type: "finish",
             result: {
               action: "load_components",
-              types: ["image-carousel"],
+              tags: ["ImageCarousel"],
             },
           } as const;
           return;
@@ -211,20 +213,97 @@ describe("Builder refinement cancellation", () => {
     });
 
     expect(requests).toHaveLength(2);
-    expect(requests[0]?.componentIndex).toContain("image-carousel");
+    expect(requests[0]?.componentIndex).toContain("ImageCarousel");
     expect(requests[0]?.componentSpecs?.join("\n")).not.toContain(
-      '"type": "image-carousel"',
+      '"tag": "ImageCarousel"',
     );
     expect(requests[1]?.componentSpecs?.join("\n")).toContain(
-      '"type": "image-carousel"',
+      '"tag": "ImageCarousel"',
     );
     expect(requests[1]?.componentSpecs?.join("\n")).not.toContain(
       "htmlTemplate",
     );
+    expect(workspace.messages).toContainEqual(
+      expect.objectContaining({
+        role: "assistant",
+        content: "The Component spec is loaded.",
+        status: "complete",
+      }),
+    );
+  });
+
+  it("repairs rejected Component syntax before committing the edit", async () => {
+    const prompts: string[] = [];
+    vi.mocked(createArticleModelFromEnv).mockReturnValue({
+      provider: "openrouter",
+      model: "test",
+      async *stream(request) {
+        prompts.push(request.currentPrompt);
+        yield {
+          type: "finish",
+          result: {
+            action: "edit",
+            response: "Converted the quote.",
+            summary: "Convert quote",
+            articleHtml:
+              prompts.length === 1
+                ? '<article><Component id="attributed-quote" data={ quote: html`<p>Quote</p>`, author: "Source", image: "/source.jpg", imageAlt: "Source" } /></article>'
+                : '<article><p><Component id="attributed-quote" data={{ quote: html`<p>Quote</p>`, author: "Source", image: "/source.jpg", imageAlt: "Source" }} /></p></article>',
+          },
+        } as const;
+      },
+    });
+
+    const workspace = await runBuilderRefinement(environment, {
+      prompt: "Use the attributed-quote Component.",
+      uploadIds: [],
+    });
+
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain("<builder-validation-feedback>");
+    expect(prompts[1]).toContain("Expected a restricted data value");
     expect(workspace.messages.at(-1)).toMatchObject({
       role: "assistant",
-      content: "The Component spec is loaded.",
       status: "complete",
+      errorCode: null,
     });
+    expect(workspace.versions.at(-1)?.content).toContain(
+      '<Component id="attributed-quote"',
+    );
+    expect(workspace.versions.at(-1)?.content).not.toMatch(/<p>\s*<Component/);
+  });
+
+  it("keeps Article Images in the workspace after a successful refinement", async () => {
+    new ArticleImageRepository(repository.sqlite).add(environment.articleId, [
+      {
+        name: "existing.png",
+        mediaType: "image/webp",
+        bytes: new Uint8Array([1, 2, 3]),
+      },
+    ]);
+    vi.mocked(createArticleModelFromEnv).mockReturnValue({
+      provider: "openrouter",
+      model: "test",
+      async *stream() {
+        yield {
+          type: "finish",
+          result: {
+            action: "edit",
+            response: "Updated copy.",
+            summary: "Update copy",
+            articleHtml: "<article><p>After</p></article>",
+          },
+        } as const;
+      },
+    });
+
+    const workspace = await runBuilderRefinement(environment, {
+      prompt: "Update the copy.",
+      uploadIds: [],
+    });
+
+    expect(workspace.articleImages).toEqual([
+      expect.objectContaining({ originalName: "existing.png" }),
+    ]);
   });
 });

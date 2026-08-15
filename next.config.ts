@@ -1,7 +1,11 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  serverExternalPackages: ["better-sqlite3", "pdf-parse"],
+  serverExternalPackages: [
+    "better-sqlite3",
+    "pdf-parse",
+    "quickjs-emscripten",
+  ],
   experimental: {
     serverActions: {
       bodySizeLimit: "52mb",

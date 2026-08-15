@@ -130,6 +130,7 @@ export function toBuilderWorkspace(
         mediaType: image.mediaType,
         sizeBytes: image.sizeBytes,
         needsUpload: image.needsUpload,
+        revision: image.updatedAt.toISOString(),
         productionPath,
         productionUrl: resolveAssetUrl(website.assetPolicy, productionPath),
         databasePreviewUrl: articleImagePreviewUrl(

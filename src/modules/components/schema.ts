@@ -2,15 +2,15 @@ import type {
   ComponentData,
   ComponentDataIssue,
   ComponentDataValidation,
-  ComponentDefinitionInput,
   ComponentFieldSchema,
   ComponentSchema,
   ComponentUiHints,
 } from "./contracts";
 import { ComponentValidationError } from "./contracts";
 
-export const COMPONENT_TYPE_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
-export const MAX_COMPONENT_TYPE_LENGTH = 80;
+export const COMPONENT_TAG_PATTERN = /^[A-Z][A-Za-z0-9]*$/;
+export const MAX_COMPONENT_TAG_LENGTH = 80;
+export const MAX_COMPONENT_NAME_LENGTH = 120;
 export const MAX_COMPONENT_DESCRIPTION_LENGTH = 500;
 export const MAX_COMPONENT_TEMPLATE_BYTES = 500_000;
 export const MAX_COMPONENT_DEFINITION_DATA_BYTES = 1_000_000;
@@ -23,7 +23,6 @@ export const MAX_COMPONENT_CHOICE_OPTIONS = 100;
 export const MAX_COMPONENT_SCHEMA_TEXT_LENGTH = 500;
 export const MAX_COMPONENT_PROPERTY_NAME_LENGTH = 100;
 export const MAX_COMPONENT_PATTERN_LENGTH = 256;
-export const MAX_COMPONENT_TEMPLATE_EACH_BLOCKS = 200;
 
 const textEncoder = new TextEncoder();
 const UI_CONTROLS = new Set([
@@ -45,7 +44,16 @@ function schemaProblem(message: string): never {
   throw new ComponentValidationError("invalid_schema", message);
 }
 
-function assertBoundedDefinitionData(input: ComponentDefinitionInput): void {
+interface ComponentContractInput {
+  schema: ComponentSchema;
+  uiHints?: ComponentUiHints;
+  defaultData?: ComponentData;
+  sampleData?: ComponentData;
+}
+
+export function assertBoundedComponentContract(
+  input: ComponentContractInput,
+): void {
   const stack: Array<{ value: unknown; depth: number; path: string }> = [
     { value: input.schema, depth: 0, path: "schema" },
     { value: input.uiHints ?? {}, depth: 0, path: "uiHints" },
@@ -155,7 +163,10 @@ function assertBoundedDefinitionData(input: ComponentDefinitionInput): void {
   }
 }
 
-function assertSafePattern(pattern: unknown, path: string): asserts pattern is string {
+function assertSafePattern(
+  pattern: unknown,
+  path: string,
+): asserts pattern is string {
   if (typeof pattern !== "string") schemaProblem(`${path} must be a string.`);
   if (
     pattern.length > MAX_COMPONENT_PATTERN_LENGTH ||
@@ -167,10 +178,11 @@ function assertSafePattern(pattern: unknown, path: string): asserts pattern is s
     );
   }
   if (/[()|]/.test(pattern) || /\\(?:[1-9]|k<)/.test(pattern)) {
-    schemaProblem(`${path} cannot use groups, alternation, lookarounds, or backreferences.`);
+    schemaProblem(
+      `${path} cannot use groups, alternation, lookarounds, or backreferences.`,
+    );
   }
-  const unboundedQuantifiers =
-    pattern.match(/(^|[^\\])(?:\\\\)*[+*?]/g) ?? [];
+  const unboundedQuantifiers = pattern.match(/(^|[^\\])(?:\\\\)*[+*?]/g) ?? [];
   let variableBoundedQuantifiers = 0;
   if (unboundedQuantifiers.length > 1 || /[*+?}][*+?{]/.test(pattern)) {
     schemaProblem(`${path} uses unsafe repeated quantifiers.`);
@@ -178,7 +190,11 @@ function assertSafePattern(pattern: unknown, path: string): asserts pattern is s
   for (const match of pattern.matchAll(/\{(\d+)(?:,(\d*))?\}/g)) {
     const lower = Number(match[1]);
     const upper = match[2] === undefined ? lower : Number(match[2]);
-    if (!Number.isSafeInteger(lower) || !Number.isSafeInteger(upper) || upper > 1_000) {
+    if (
+      !Number.isSafeInteger(lower) ||
+      !Number.isSafeInteger(upper) ||
+      upper > 1_000
+    ) {
       schemaProblem(`${path} uses an unsafe repetition bound.`);
     }
     if (upper !== lower) variableBoundedQuantifiers += 1;
@@ -196,34 +212,11 @@ function assertSafePattern(pattern: unknown, path: string): asserts pattern is s
   }
 }
 
-function assertTemplateComplexity(template: string): void {
-  const tokens = template.matchAll(/{{\s*(#each\s+[^}]+|\/each)\s*}}/g);
-  let depth = 0;
-  let blocks = 0;
-  for (const token of tokens) {
-    if (token[1]?.startsWith("#each")) {
-      depth += 1;
-      blocks += 1;
-      if (depth > MAX_COMPONENT_STRUCTURE_DEPTH) {
-        throw new ComponentValidationError(
-          "invalid_template",
-          `Component HTML exceeds the ${MAX_COMPONENT_STRUCTURE_DEPTH}-level each-block nesting limit.`,
-        );
-      }
-      if (blocks > MAX_COMPONENT_TEMPLATE_EACH_BLOCKS) {
-        throw new ComponentValidationError(
-          "invalid_template",
-          `Component HTML exceeds the ${MAX_COMPONENT_TEMPLATE_EACH_BLOCKS}-block each limit.`,
-        );
-      }
-    } else {
-      depth = Math.max(0, depth - 1);
-    }
-  }
-}
-
 function assertNonNegativeInteger(value: unknown, label: string): void {
-  if (value !== undefined && (!Number.isSafeInteger(value) || Number(value) < 0)) {
+  if (
+    value !== undefined &&
+    (!Number.isSafeInteger(value) || Number(value) < 0)
+  ) {
     schemaProblem(`${label} must be a non-negative integer.`);
   }
 }
@@ -238,7 +231,10 @@ function assertFieldSchema(
   seen.add(schema);
 
   const allowedBase = new Set(["type", "description"]);
-  if (schema.description !== undefined && typeof schema.description !== "string") {
+  if (
+    schema.description !== undefined &&
+    typeof schema.description !== "string"
+  ) {
     schemaProblem(`${path}.description must be a string.`);
   }
   if (
@@ -267,7 +263,9 @@ function assertFieldSchema(
         Number(schema.minLength ?? 0) > MAX_COMPONENT_DATA_STRING_BYTES ||
         Number(schema.maxLength ?? 0) > MAX_COMPONENT_DATA_STRING_BYTES
       ) {
-        schemaProblem(`${path} string lengths cannot exceed ${MAX_COMPONENT_DATA_STRING_BYTES}.`);
+        schemaProblem(
+          `${path} string lengths cannot exceed ${MAX_COMPONENT_DATA_STRING_BYTES}.`,
+        );
       }
       if (
         schema.minLength !== undefined &&
@@ -319,7 +317,11 @@ function assertFieldSchema(
       }
       break;
     case "choice": {
-      assertOnlyKeys(schema, new Set([...allowedBase, "options", "default"]), path);
+      assertOnlyKeys(
+        schema,
+        new Set([...allowedBase, "options", "default"]),
+        path,
+      );
       if (!Array.isArray(schema.options) || schema.options.length === 0) {
         schemaProblem(`${path}.options must be a non-empty array.`);
       }
@@ -337,15 +339,23 @@ function assertFieldSchema(
         ) {
           schemaProblem(`${path}.options[${index}] is invalid.`);
         }
-        assertOnlyKeys(option, new Set(["value", "label"]), `${path}.options[${index}]`);
+        assertOnlyKeys(
+          option,
+          new Set(["value", "label"]),
+          `${path}.options[${index}]`,
+        );
         if (
           option.value.length > MAX_COMPONENT_SCHEMA_TEXT_LENGTH ||
           (option.label?.length ?? 0) > MAX_COMPONENT_SCHEMA_TEXT_LENGTH
         ) {
-          schemaProblem(`${path}.options[${index}] contains text that is too long.`);
+          schemaProblem(
+            `${path}.options[${index}] contains text that is too long.`,
+          );
         }
         if (values.has(option.value)) {
-          schemaProblem(`${path}.options contains duplicate value ${option.value}.`);
+          schemaProblem(
+            `${path}.options contains duplicate value ${option.value}.`,
+          );
         }
         values.add(option.value);
       }
@@ -357,18 +367,28 @@ function assertFieldSchema(
     case "object": {
       assertOnlyKeys(
         schema,
-        new Set([...allowedBase, "properties", "required", "additionalProperties"]),
+        new Set([
+          ...allowedBase,
+          "properties",
+          "required",
+          "additionalProperties",
+        ]),
         path,
       );
       if (!isObject(schema.properties)) {
         schemaProblem(`${path}.properties must be an object.`);
       }
-      if (Object.keys(schema.properties).length > MAX_COMPONENT_OBJECT_PROPERTIES) {
+      if (
+        Object.keys(schema.properties).length > MAX_COMPONENT_OBJECT_PROPERTIES
+      ) {
         schemaProblem(
           `${path}.properties exceeds the ${MAX_COMPONENT_OBJECT_PROPERTIES}-property limit.`,
         );
       }
-      if (schema.additionalProperties !== undefined && schema.additionalProperties !== false) {
+      if (
+        schema.additionalProperties !== undefined &&
+        schema.additionalProperties !== false
+      ) {
         schemaProblem(`${path}.additionalProperties must be false.`);
       }
       for (const [key, child] of Object.entries(schema.properties)) {
@@ -382,12 +402,17 @@ function assertFieldSchema(
           key.includes("[") ||
           key.includes("]")
         ) {
-          schemaProblem(`${path}.properties has invalid key ${JSON.stringify(key)}.`);
+          schemaProblem(
+            `${path}.properties has invalid key ${JSON.stringify(key)}.`,
+          );
         }
         assertFieldSchema(child, `${path}.properties.${key}`, seen);
       }
       if (schema.required !== undefined) {
-        if (!Array.isArray(schema.required) || schema.required.some((key) => typeof key !== "string")) {
+        if (
+          !Array.isArray(schema.required) ||
+          schema.required.some((key) => typeof key !== "string")
+        ) {
           schemaProblem(`${path}.required must be an array of property names.`);
         }
         const unique = new Set(schema.required);
@@ -396,7 +421,9 @@ function assertFieldSchema(
         }
         for (const key of unique) {
           if (!(key in schema.properties)) {
-            schemaProblem(`${path}.required references unknown property ${key}.`);
+            schemaProblem(
+              `${path}.required references unknown property ${key}.`,
+            );
           }
         }
       }
@@ -414,7 +441,9 @@ function assertFieldSchema(
         Number(schema.minItems ?? 0) > MAX_COMPONENT_ARRAY_ITEMS ||
         Number(schema.maxItems ?? 0) > MAX_COMPONENT_ARRAY_ITEMS
       ) {
-        schemaProblem(`${path} item limits cannot exceed ${MAX_COMPONENT_ARRAY_ITEMS}.`);
+        schemaProblem(
+          `${path} item limits cannot exceed ${MAX_COMPONENT_ARRAY_ITEMS}.`,
+        );
       }
       if (
         schema.minItems !== undefined &&
@@ -440,7 +469,9 @@ function assertOnlyKeys(
   if (unknown) schemaProblem(`${path} has unknown field ${unknown}.`);
 }
 
-export function assertValidComponentSchema(schema: unknown): asserts schema is ComponentSchema {
+export function assertValidComponentSchema(
+  schema: unknown,
+): asserts schema is ComponentSchema {
   assertFieldSchema(schema, "schema", new Set());
   if (schema.type !== "object") {
     schemaProblem("A Component schema must have an object root.");
@@ -470,14 +501,41 @@ function validateField(
         issue(issues, path, "wrong_type", `${path} must be a string.`);
         return;
       }
-      if ("minLength" in schema && schema.minLength !== undefined && value.length < schema.minLength) {
-        issue(issues, path, "too_short", `${path} is shorter than ${schema.minLength}.`);
+      if (
+        "minLength" in schema &&
+        schema.minLength !== undefined &&
+        value.length < schema.minLength
+      ) {
+        issue(
+          issues,
+          path,
+          "too_short",
+          `${path} is shorter than ${schema.minLength}.`,
+        );
       }
-      if ("maxLength" in schema && schema.maxLength !== undefined && value.length > schema.maxLength) {
-        issue(issues, path, "too_long", `${path} is longer than ${schema.maxLength}.`);
+      if (
+        "maxLength" in schema &&
+        schema.maxLength !== undefined &&
+        value.length > schema.maxLength
+      ) {
+        issue(
+          issues,
+          path,
+          "too_long",
+          `${path} is longer than ${schema.maxLength}.`,
+        );
       }
-      if (schema.type === "string" && schema.pattern && !new RegExp(schema.pattern).test(value)) {
-        issue(issues, path, "pattern", `${path} does not match its required pattern.`);
+      if (
+        schema.type === "string" &&
+        schema.pattern &&
+        !new RegExp(schema.pattern).test(value)
+      ) {
+        issue(
+          issues,
+          path,
+          "pattern",
+          `${path} does not match its required pattern.`,
+        );
       }
       return;
     }
@@ -490,10 +548,20 @@ function validateField(
         issue(issues, path, "invalid_value", `${path} must be an integer.`);
       }
       if (schema.minimum !== undefined && value < schema.minimum) {
-        issue(issues, path, "invalid_value", `${path} must be at least ${schema.minimum}.`);
+        issue(
+          issues,
+          path,
+          "invalid_value",
+          `${path} must be at least ${schema.minimum}.`,
+        );
       }
       if (schema.maximum !== undefined && value > schema.maximum) {
-        issue(issues, path, "invalid_value", `${path} must be at most ${schema.maximum}.`);
+        issue(
+          issues,
+          path,
+          "invalid_value",
+          `${path} must be at most ${schema.maximum}.`,
+        );
       }
       return;
     case "boolean":
@@ -505,7 +573,12 @@ function validateField(
       if (typeof value !== "string") {
         issue(issues, path, "wrong_type", `${path} must be a string.`);
       } else if (!schema.options.some((option) => option.value === value)) {
-        issue(issues, path, "invalid_value", `${path} is not an allowed choice.`);
+        issue(
+          issues,
+          path,
+          "invalid_value",
+          `${path} is not an allowed choice.`,
+        );
       }
       return;
     case "array":
@@ -514,12 +587,24 @@ function validateField(
         return;
       }
       if (schema.minItems !== undefined && value.length < schema.minItems) {
-        issue(issues, path, "too_few", `${path} needs at least ${schema.minItems} items.`);
+        issue(
+          issues,
+          path,
+          "too_few",
+          `${path} needs at least ${schema.minItems} items.`,
+        );
       }
       if (schema.maxItems !== undefined && value.length > schema.maxItems) {
-        issue(issues, path, "too_many", `${path} allows at most ${schema.maxItems} items.`);
+        issue(
+          issues,
+          path,
+          "too_many",
+          `${path} allows at most ${schema.maxItems} items.`,
+        );
       }
-      value.forEach((item, index) => validateField(schema.items, item, `${path}[${index}]`, issues));
+      value.forEach((item, index) =>
+        validateField(schema.items, item, `${path}[${index}]`, issues),
+      );
       return;
     case "object": {
       if (!isObject(value)) {
@@ -529,13 +614,23 @@ function validateField(
       const required = new Set(schema.required ?? []);
       for (const key of required) {
         if (!(key in value)) {
-          issue(issues, `${path}.${key}`, "required", `${path}.${key} is required.`);
+          issue(
+            issues,
+            `${path}.${key}`,
+            "required",
+            `${path}.${key} is required.`,
+          );
         }
       }
       for (const [key, child] of Object.entries(value)) {
         const childSchema = schema.properties[key];
         if (!childSchema) {
-          issue(issues, `${path}.${key}`, "unknown_property", `${path}.${key} is not allowed.`);
+          issue(
+            issues,
+            `${path}.${key}`,
+            "unknown_property",
+            `${path}.${key} is not allowed.`,
+          );
         } else {
           validateField(childSchema, child, `${path}.${key}`, issues);
         }
@@ -557,7 +652,10 @@ export function validateComponentData(
 export function assertValidComponentData(
   schema: ComponentSchema,
   data: unknown,
-  code: "invalid_default_data" | "invalid_sample_data" | "invalid_data" = "invalid_data",
+  code:
+    | "invalid_default_data"
+    | "invalid_sample_data"
+    | "invalid_data" = "invalid_data",
 ): asserts data is ComponentData {
   const validation = validateComponentData(schema, data);
   if (!validation.valid) {
@@ -569,26 +667,55 @@ export function assertValidComponentData(
   }
 }
 
-function assertUiHints(hints: unknown, schema: ComponentSchema): asserts hints is ComponentUiHints {
+function assertUiHints(
+  hints: unknown,
+  schema: ComponentSchema,
+): asserts hints is ComponentUiHints {
   if (!isObject(hints)) {
-    throw new ComponentValidationError("invalid_ui_hints", "UI hints must be an object.");
+    throw new ComponentValidationError(
+      "invalid_ui_hints",
+      "UI hints must be an object.",
+    );
   }
   const paths = collectSchemaPaths(schema);
   for (const [path, hint] of Object.entries(hints)) {
     if (!paths.has(path)) {
-      throw new ComponentValidationError("invalid_ui_hints", `UI hint path ${path} is not in the schema.`);
+      throw new ComponentValidationError(
+        "invalid_ui_hints",
+        `UI hint path ${path} is not in the schema.`,
+      );
     }
     if (!isObject(hint)) {
-      throw new ComponentValidationError("invalid_ui_hints", `UI hint ${path} must be an object.`);
+      throw new ComponentValidationError(
+        "invalid_ui_hints",
+        `UI hint ${path} must be an object.`,
+      );
     }
-    const allowed = new Set(["label", "helpText", "placeholder", "control", "order"]);
+    const allowed = new Set([
+      "label",
+      "helpText",
+      "placeholder",
+      "control",
+      "order",
+    ]);
     const unknown = Object.keys(hint).find((key) => !allowed.has(key));
     if (unknown) {
-      throw new ComponentValidationError("invalid_ui_hints", `UI hint ${path} has unknown field ${unknown}.`);
+      throw new ComponentValidationError(
+        "invalid_ui_hints",
+        `UI hint ${path} has unknown field ${unknown}.`,
+      );
     }
-    for (const key of ["label", "helpText", "placeholder", "control"] as const) {
+    for (const key of [
+      "label",
+      "helpText",
+      "placeholder",
+      "control",
+    ] as const) {
       if (hint[key] !== undefined && typeof hint[key] !== "string") {
-        throw new ComponentValidationError("invalid_ui_hints", `UI hint ${path}.${key} must be a string.`);
+        throw new ComponentValidationError(
+          "invalid_ui_hints",
+          `UI hint ${path}.${key} must be a string.`,
+        );
       }
       if (
         typeof hint[key] === "string" &&
@@ -600,17 +727,17 @@ function assertUiHints(hints: unknown, schema: ComponentSchema): asserts hints i
         );
       }
     }
-    if (
-      typeof hint.control === "string" &&
-      !UI_CONTROLS.has(hint.control)
-    ) {
+    if (typeof hint.control === "string" && !UI_CONTROLS.has(hint.control)) {
       throw new ComponentValidationError(
         "invalid_ui_hints",
         `UI hint ${path}.control is not supported.`,
       );
     }
     if (hint.order !== undefined && !Number.isFinite(hint.order)) {
-      throw new ComponentValidationError("invalid_ui_hints", `UI hint ${path}.order must be a number.`);
+      throw new ComponentValidationError(
+        "invalid_ui_hints",
+        `UI hint ${path}.order must be a number.`,
+      );
     }
   }
 }
@@ -631,37 +758,10 @@ function collectSchemaPaths(schema: ComponentSchema): Set<string> {
   return paths;
 }
 
-export function normalizeComponentInput(input: ComponentDefinitionInput): Required<ComponentDefinitionInput> {
-  if (!input || typeof input !== "object") {
-    throw new ComponentValidationError("invalid_data", "Component input must be an object.");
-  }
-  assertBoundedDefinitionData(input);
-  if (
-    typeof input.type !== "string" ||
-    input.type.length > MAX_COMPONENT_TYPE_LENGTH ||
-    !COMPONENT_TYPE_PATTERN.test(input.type)
-  ) {
-    throw new ComponentValidationError(
-      "invalid_type",
-      "Component type must be lowercase kebab-case and start with a letter.",
-    );
-  }
-  const description = input.description?.trim();
-  if (!description || description.length > MAX_COMPONENT_DESCRIPTION_LENGTH) {
-    throw new ComponentValidationError(
-      "invalid_description",
-      `Component description must be 1-${MAX_COMPONENT_DESCRIPTION_LENGTH} characters.`,
-    );
-  }
-  if (
-    typeof input.htmlTemplate !== "string" ||
-    input.htmlTemplate.trim().length === 0 ||
-    new TextEncoder().encode(input.htmlTemplate).byteLength > MAX_COMPONENT_TEMPLATE_BYTES ||
-    input.htmlTemplate.includes("\0")
-  ) {
-    throw new ComponentValidationError("invalid_template", "Component HTML template is empty, too large, or invalid.");
-  }
-  assertTemplateComplexity(input.htmlTemplate);
+export function assertValidPreparedComponentContract(
+  input: ComponentContractInput,
+): void {
+  assertBoundedComponentContract(input);
   assertValidComponentSchema(input.schema);
   const uiHints = input.uiHints ?? {};
   assertUiHints(uiHints, input.schema);
@@ -669,13 +769,4 @@ export function normalizeComponentInput(input: ComponentDefinitionInput): Requir
   const sampleData = input.sampleData ?? defaultData;
   assertValidComponentData(input.schema, defaultData, "invalid_default_data");
   assertValidComponentData(input.schema, sampleData, "invalid_sample_data");
-  return {
-    type: input.type,
-    description,
-    htmlTemplate: input.htmlTemplate,
-    schema: structuredClone(input.schema),
-    uiHints: structuredClone(uiHints),
-    defaultData: structuredClone(defaultData),
-    sampleData: structuredClone(sampleData),
-  };
 }

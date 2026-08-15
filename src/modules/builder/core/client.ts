@@ -5,7 +5,10 @@ import {
   getBuilderUploadPreviewAction,
   getBuilderWorkspaceAction,
   formatBuilderArticleSourceAction,
+  removeBuilderArticleImageAction,
+  reorderBuilderArticleImagesAction,
   runBuilderActionAction,
+  uploadBuilderArticleImagesAction,
   uploadBuilderReferencesAction,
   type ActionResult,
 } from "../server/actions";
@@ -40,7 +43,9 @@ export async function fetchWorkspace(
   return unwrap(await getBuilderWorkspaceAction(reference(environment)));
 }
 
-export async function formatBuilderArticleSource(source: string): Promise<string> {
+export async function formatBuilderArticleSource(
+  source: string,
+): Promise<string> {
   return unwrap(await formatBuilderArticleSourceAction(source));
 }
 
@@ -48,7 +53,9 @@ export async function compileBuilderPreview(
   environment: BuilderEnvironment,
   source: string,
 ): Promise<string> {
-  return unwrap(await compileBuilderPreviewAction(reference(environment), source));
+  return unwrap(
+    await compileBuilderPreviewAction(reference(environment), source),
+  );
 }
 
 export async function runBuilderAction(
@@ -75,6 +82,37 @@ export async function convertArticleImageToJpeg(
 ): Promise<BuilderWorkspace> {
   return unwrap(
     await convertArticleImageToJpegAction(reference(environment), { imageId }),
+  );
+}
+
+export async function uploadArticleImages(
+  environment: BuilderEnvironment,
+  files: File[],
+): Promise<BuilderWorkspace> {
+  const data = new FormData();
+  files.forEach((file) => data.append("files", file));
+  return unwrap(
+    await uploadBuilderArticleImagesAction(reference(environment), data),
+  );
+}
+
+export async function reorderArticleImages(
+  environment: BuilderEnvironment,
+  orderedImageIds: string[],
+): Promise<BuilderWorkspace> {
+  return unwrap(
+    await reorderBuilderArticleImagesAction(reference(environment), {
+      orderedImageIds,
+    }),
+  );
+}
+
+export async function removeArticleImage(
+  environment: BuilderEnvironment,
+  imageId: string,
+): Promise<BuilderWorkspace> {
+  return unwrap(
+    await removeBuilderArticleImageAction(reference(environment), { imageId }),
   );
 }
 

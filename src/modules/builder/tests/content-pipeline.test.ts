@@ -72,8 +72,23 @@ describe("generated Article HTML formatting", () => {
         "<article><h1>Title</h1><p>Hello <strong>world</strong></p></article>",
       ),
     ).resolves.toBe(
-      "<article>\n  <h1>Title</h1>\n  <p>Hello <strong>world</strong></p>\n</article>\n",
+      "<article>\n  <h1>Title</h1>\n  <p>\n    Hello\n    <strong>world</strong>\n  </p>\n</article>\n",
     );
+  });
+
+  it("applies VS Code Prettier wrapping through the shared formatter", async () => {
+    const source =
+      "<p><strong>The targeting of data centers reflects a deliberate strategy to inflict outsized pain on the United States.</strong> GCC countries have pledged over $2 trillion in AI-related investments with the U.S.</p>";
+
+    await expect(formatArticleHtml(source)).resolves.toBe(`<p>
+  <strong>
+    The targeting of data centers reflects a deliberate strategy to inflict
+    outsized pain on the United States.
+  </strong>
+  GCC countries have pledged over $2 trillion in AI-related investments with the
+  U.S.
+</p>
+`);
   });
 
   it("formats a complete HTML document without changing its form", async () => {

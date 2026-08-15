@@ -75,6 +75,7 @@ export interface BuilderArticleImage {
   mediaType: string;
   sizeBytes: number;
   needsUpload: boolean;
+  revision: string;
   productionPath: string;
   productionUrl: string;
   databasePreviewUrl: string;

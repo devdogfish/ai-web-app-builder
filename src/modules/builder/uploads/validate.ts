@@ -38,6 +38,17 @@ export function validateReferenceUploads(
   return validateUploads(files, BUILDER_UPLOAD_LIMITS.referenceExtensions);
 }
 
+export function validateArticleImageUploads(
+  files: readonly UploadCandidate[],
+): UploadValidationResult {
+  const result = validateUploads(
+    files,
+    BUILDER_UPLOAD_LIMITS.imageExtensions,
+    (file) => file.type?.startsWith("image/") ?? false,
+  );
+  return result;
+}
+
 export function validateBootstrapDocument(
   file: UploadCandidate,
 ): UploadValidationResult {
@@ -47,6 +58,8 @@ export function validateBootstrapDocument(
 function validateUploads(
   files: readonly UploadCandidate[],
   allowedExtensions: readonly string[],
+  acceptsWithoutKnownExtension: (file: UploadCandidate) => boolean = () =>
+    false,
 ): UploadValidationResult {
   const issues: UploadValidationIssue[] = [];
   const totalBytes = files.reduce(
@@ -83,7 +96,10 @@ function validateUploads(
       });
     }
 
-    if (!allowedExtensions.includes(fileExtension(file.name) as never)) {
+    if (
+      !acceptsWithoutKnownExtension(file) &&
+      !allowedExtensions.includes(fileExtension(file.name) as never)
+    ) {
       issues.push({
         code: "unsupported_extension",
         fileName: file.name,
@@ -113,6 +129,13 @@ export function assertValidReferenceUploads(
   files: readonly UploadCandidate[],
 ): void {
   const validation = validateReferenceUploads(files);
+  if (!validation.valid) throw new UploadValidationError(validation);
+}
+
+export function assertValidArticleImageUploads(
+  files: readonly UploadCandidate[],
+): void {
+  const validation = validateArticleImageUploads(files);
   if (!validation.valid) throw new UploadValidationError(validation);
 }
 

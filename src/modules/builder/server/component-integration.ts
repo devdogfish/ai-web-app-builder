@@ -2,7 +2,9 @@ import "server-only";
 
 import {
   detachComponentReference,
+  displayComponentTagReferences,
   parseArticleSource,
+  resolveComponentTagReferences,
   serializeComponentSpec,
   serializeComponentSummaryIndex,
   toComponentSpec,
@@ -19,42 +21,41 @@ import {
 export interface BuilderComponentModelContext {
   index: string;
   specs: readonly string[];
-  loadedTypes: readonly string[];
+  loadedTags: readonly string[];
 }
 
 export function builderComponentModelContext(
   source: string,
   requestText: string,
-  requestedTypes: readonly string[] = [],
+  requestedTags: readonly string[] = [],
 ): BuilderComponentModelContext {
   const repository = getComponentRepository();
   const definitions = repository.list();
-  const usedTypes = new Set(
-    parseArticleSource(source).references.map((reference) => reference.type),
+  const usedIds = new Set(
+    parseArticleSource(source).references.map((reference) => reference.id),
   );
-  const relevantTypes = new Set(usedTypes);
+  const relevantIds = new Set(usedIds);
   for (const candidate of likelyComponents(definitions, requestText)) {
-    relevantTypes.add(candidate.type);
+    relevantIds.add(candidate.id);
   }
-  for (const type of requestedTypes) {
-    if (!repository.get(type)) {
-      throw new Error(`Component ${type} is not available.`);
+  for (const tag of requestedTags) {
+    const definition = repository.getByTag(tag);
+    if (!definition) {
+      throw new Error(`Component ${tag} is not available.`);
     }
-    relevantTypes.add(type);
+    relevantIds.add(definition.id);
   }
 
-  const loadedTypes = [...relevantTypes].sort();
-  const specs = loadedTypes
-    .flatMap((type) => {
-      const definition =
-        repository.get(type) ??
-        (usedTypes.has(type) ? repository.getForCompilation(type) : null);
-      return definition ? [serializeComponentSpec(definition)] : [];
-    });
+  const loadedDefinitions = [...relevantIds].flatMap((id) => {
+    const definition =
+      repository.get(id) ??
+      (usedIds.has(id) ? repository.getForCompilation(id) : null);
+    return definition ? [definition] : [];
+  });
   return {
     index: serializeComponentSummaryIndex(definitions),
-    specs,
-    loadedTypes,
+    specs: loadedDefinitions.map(serializeComponentSpec),
+    loadedTags: loadedDefinitions.map((definition) => definition.tag).sort(),
   };
 }
 
@@ -63,8 +64,11 @@ export async function prepareManagedSourceForSave(
   previousSource?: string,
 ): Promise<{ source: string; compiledHtml: string }> {
   const repository = getComponentRepository();
-  const formatted = await formatManagedArticleSource(source, repository);
-  assertValidManagedArticleSource(formatted, repository, {
+  const resolved = resolveComponentTagReferences(source, (tag) =>
+    repository.getByTag(tag),
+  );
+  const formatted = await formatManagedArticleSource(resolved, repository);
+  await assertValidManagedArticleSource(formatted, repository, {
     allowBlank: true,
     previousSource,
   });
@@ -82,52 +86,71 @@ export async function prepareHistoricalSourceForRestore(
   const references = parseArticleSource(source).references;
   for (let index = references.length - 1; index >= 0; index -= 1) {
     const reference = references[index]!;
-    if (repository.get(reference.type)) continue;
-    if (!repository.getForCompilation(reference.type)) {
-      throw new Error(`Historical Component ${reference.type} is unavailable.`);
+    if (repository.get(reference.id)) continue;
+    if (!repository.getForCompilation(reference.id)) {
+      throw new Error(`Historical Component ${reference.id} is unavailable.`);
     }
-    source = detachComponentReference(source, { start: reference.start }, repository);
+    source = await detachComponentReference(
+      source,
+      { start: reference.start },
+      repository,
+    );
   }
   return prepareManagedSourceForSave(source);
 }
 
-export function assertManagedModelOutput(
+export async function assertManagedModelOutput(
   previousSource: string,
   nextSource: string,
-): void {
-  assertValidManagedArticleSource(nextSource, getComponentRepository(), {
+): Promise<void> {
+  const repository = getComponentRepository();
+  const resolved = resolveComponentTagReferences(nextSource, (tag) =>
+    repository.getByTag(tag),
+  );
+  await assertValidManagedArticleSource(resolved, repository, {
     previousSource,
   });
 }
 
-export function detachManagedComponentDraft(
+export async function detachManagedComponentDraft(
   source: string,
   index: number,
-  expectedType: string,
-): string {
+  expectedId: string,
+): Promise<string> {
   const repository = getComponentRepository();
   const reference = parseArticleSource(source).references[index];
-  if (!reference || reference.type !== expectedType) {
-    throw new Error("The selected managed Component changed. Reload and retry.");
+  if (!reference || reference.id !== expectedId) {
+    throw new Error(
+      "The selected managed Component changed. Reload and retry.",
+    );
   }
   return detachComponentReference(source, index, repository);
 }
 
-export function getBuilderComponentSpec(type: string): ComponentSpec | null {
-  const definition = getComponentRepository().get(type);
+export function getBuilderComponentSpec(id: string): ComponentSpec | null {
+  const definition = getComponentRepository().get(id);
   return definition ? toComponentSpec(definition) : null;
 }
 
-export async function compileBuilderPreviewSource(source: string): Promise<string> {
+export async function compileBuilderPreviewSource(
+  source: string,
+): Promise<string> {
   return compileManagedArticleSource(source, getComponentRepository(), {
     allowDeleted: true,
   });
 }
 
-export async function formatBuilderSourceDraft(source: string): Promise<string> {
+export async function formatBuilderSourceDraft(
+  source: string,
+): Promise<string> {
   const repository = getComponentRepository();
-  const formatted = await formatManagedArticleSource(source, repository);
-  assertValidManagedArticleSource(formatted, repository, { allowBlank: true });
+  const resolved = resolveComponentTagReferences(source, (tag) =>
+    repository.getByTag(tag),
+  );
+  const formatted = await formatManagedArticleSource(resolved, repository);
+  await assertValidManagedArticleSource(formatted, repository, {
+    allowBlank: true,
+  });
   return formatted;
 }
 
@@ -135,10 +158,16 @@ export function hasActiveComponents(): boolean {
   return getComponentRepository().listSummaries().length > 0;
 }
 
-function likelyComponents<T extends { type: string; description: string }>(
-  definitions: readonly T[],
-  requestText: string,
-): T[] {
+export function displayManagedSourceForModel(source: string): string {
+  const repository = getComponentRepository();
+  return displayComponentTagReferences(source, (id) =>
+    repository.getForCompilation(id),
+  );
+}
+
+function likelyComponents<
+  T extends { id: string; tag: string; name: string; description: string },
+>(definitions: readonly T[], requestText: string): T[] {
   const terms = new Set(
     requestText
       .toLowerCase()
@@ -148,9 +177,10 @@ function likelyComponents<T extends { type: string; description: string }>(
   if (terms.size === 0) return [];
   return definitions
     .map((definition) => {
-      const searchable = `${definition.type} ${definition.description}`
-        .toLowerCase()
-        .match(/[a-z0-9]+/g) ?? [];
+      const searchable =
+        `${definition.name} ${definition.description}`
+          .toLowerCase()
+          .match(/[a-z0-9]+/g) ?? [];
       return {
         definition,
         score: searchable.filter((term) => terms.has(term)).length,
@@ -160,7 +190,7 @@ function likelyComponents<T extends { type: string; description: string }>(
     .sort(
       (left, right) =>
         right.score - left.score ||
-        left.definition.type.localeCompare(right.definition.type),
+        left.definition.name.localeCompare(right.definition.name),
     )
     .slice(0, 3)
     .map((candidate) => candidate.definition);

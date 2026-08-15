@@ -1,3 +1,3 @@
 # Use restricted Component data syntax
 
-Component References contain a Component Type and a restricted object literal, with `html` template literals for rich HTML values. This keeps each reference self-contained and LLM-readable without forcing HTML attributes and markup through JSON string escaping; the syntax is parsed as inert data and never executed as JavaScript.
+Component References retain an immutable Component ID and a restricted object literal internally, with `html` template literals for rich HTML values. User- and model-facing Article Source resolves that identity to an import-free, name-derived Component Tag such as `<SimpleTabs />`. This keeps identity stable across renames while presenting familiar HTML-like syntax; reference data is parsed as inert data and never executed as JavaScript.

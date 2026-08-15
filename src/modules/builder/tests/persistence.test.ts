@@ -99,27 +99,24 @@ describe("ArticleRepository", () => {
     repository.close();
   });
 
-  it("upgrades a local messages table with durable error codes", () => {
+  it("creates the current messages schema through Drizzle migrations", () => {
     const sqlite = new Database(":memory:");
-    sqlite.exec(`
-      CREATE TABLE messages (
-        id TEXT PRIMARY KEY NOT NULL,
-        chat_id TEXT NOT NULL,
-        role TEXT NOT NULL,
-        kind TEXT NOT NULL DEFAULT 'chat',
-        content TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'complete',
-        created_at INTEGER NOT NULL
-      );
-    `);
-
     initializeDatabase(sqlite);
 
     expect(
-      (sqlite.pragma("table_info(messages)") as Array<{ name: string }>).some(
-        (column) => column.name === "error_code",
+      (sqlite.pragma("table_info(messages)") as Array<{ name: string }>).map(
+        (column) => column.name,
       ),
-    ).toBe(true);
+    ).toEqual(
+      expect.arrayContaining(["error_code", "duration_ms", "thinking_ms"]),
+    );
+    expect(
+      sqlite
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = '__drizzle_migrations'",
+        )
+        .get(),
+    ).toEqual({ name: "__drizzle_migrations" });
     sqlite.close();
   });
 
@@ -320,9 +317,7 @@ describe("ArticleRepository", () => {
     } as Parameters<typeof repository.bootstrapArticle>[0]);
 
     expect(workspace.chat.id).not.toBe(racedWorkspace.chat.id);
-    expect(workspace.currentVersion.html).toBe(
-      "<p>Imported Word document</p>",
-    );
+    expect(workspace.currentVersion.html).toBe("<p>Imported Word document</p>");
     expect(workspace.messages).toEqual([
       expect.objectContaining({ role: "user", kind: "chat", content: "" }),
     ]);
@@ -405,54 +400,6 @@ describe("ArticleRepository", () => {
         versionId: baseline.currentVersion.id,
         html: "after",
         expectedPreviousSha256: baseline.currentVersion.sha256,
-      }),
-    ]);
-
-    repository.close();
-  });
-
-  it("collapses legacy manual versions and source-edit messages", () => {
-    const repository = createTestRepository();
-    const baseline = repository.bootstrapArticle({
-      article: { id: "article-1", website: "news", articleType: "story" },
-      html: "baseline",
-    });
-
-    repository.sqlite.exec(`
-      DROP TRIGGER versions_are_immutable;
-      INSERT INTO messages
-        (id, chat_id, role, kind, content, status, created_at)
-      VALUES
-        ('legacy-message-1', '${baseline.chat.id}', 'user', 'source_apply', 'Applied source edit', 'complete', 2),
-        ('legacy-message-2', '${baseline.chat.id}', 'user', 'source_apply', 'Applied source edit', 'complete', 3);
-      INSERT INTO versions
-        (id, chat_id, message_id, parent_version_id, restored_from_version_id, number, html, summary, source, sha256, created_at)
-      VALUES
-        ('legacy-version-1', '${baseline.chat.id}', 'legacy-message-1', '${baseline.currentVersion.id}', NULL, 2, 'manual one', 'Applied source edit', 'manual', 'sha-manual-one', 2),
-        ('legacy-version-2', '${baseline.chat.id}', 'legacy-message-2', 'legacy-version-1', NULL, 3, 'manual two', 'Applied source edit', 'manual', 'sha-manual-two', 3);
-      UPDATE builder_chats
-        SET current_version_id = 'legacy-version-2'
-        WHERE id = '${baseline.chat.id}';
-      UPDATE articles SET html = 'manual two' WHERE id = 'article-1';
-    `);
-
-    initializeDatabase(repository.sqlite);
-    const workspace = repository.getWorkspace("article-1");
-
-    expect(workspace?.versions).toHaveLength(1);
-    expect(workspace?.messages).toEqual([]);
-    expect(workspace?.currentVersion).toMatchObject({
-      id: baseline.currentVersion.id,
-      number: 1,
-      html: "manual two",
-      sha256: "sha-manual-two",
-    });
-    expect(repository.getPendingHostSync("article-1")).toEqual([
-      expect.objectContaining({
-        versionId: baseline.currentVersion.id,
-        versionNumber: 1,
-        html: "manual two",
-        sha256: "sha-manual-two",
       }),
     ]);
 

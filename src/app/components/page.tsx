@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import { connection } from "next/server";
 
-import { assertBuilderActionAccess } from "@/modules/builder/environment/request-resolver";
 import { ComponentLibraryPage } from "@/modules/components/ui/component-library-page";
 import { getComponentRepository } from "@/modules/components/server";
 
@@ -9,15 +8,21 @@ export const runtime = "nodejs";
 
 export const metadata: Metadata = {
   title: "Component Library · Article Builder",
-  description: "Create and manage reusable article HTML Components.",
+  description:
+    "Create typed TSX Components that compile to standalone article HTML.",
 };
 
-export default async function ComponentsPage() {
+export default async function ComponentsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ edit?: string | string[] }>;
+}) {
   await connection();
-  await assertBuilderActionAccess("read");
+  const { edit } = await searchParams;
   return (
     <ComponentLibraryPage
       initialDefinitions={getComponentRepository().list()}
+      initialEditingId={typeof edit === "string" ? edit : null}
     />
   );
 }

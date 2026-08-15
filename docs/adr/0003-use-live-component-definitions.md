@@ -1,3 +1,3 @@
-# Use live Component definitions without versions
+# Use live Component definitions with stable hidden IDs
 
-Component Types are unique unversioned names, and every Managed Block compiles with its Component's current definition. This keeps authoring and Component discovery simple; editing a Component updates all managed references, while detaching a block freezes its generated HTML for independent customization. Deleting a Component first materializes its current generated HTML into every referencing Article Source so no article is left broken.
+Component IDs are immutable primary keys, while each active Component Tag is the unique PascalCase form of its mutable Component Name. Managed Blocks resolve only by hidden Component ID and compile with the current definition, so renaming a Component immediately changes its visible Tag without changing references. Editing a Component updates all managed references; detaching freezes generated HTML. Deletion first materializes active references, and a later Component may safely reuse the deleted Component's Tag because it receives a different ID.

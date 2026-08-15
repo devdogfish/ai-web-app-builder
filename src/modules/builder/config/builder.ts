@@ -21,6 +21,20 @@ const uploads = Object.freeze({
     ".gif",
     ".svg",
   ] as const,
+  imageExtensions: [
+    ".avif",
+    ".bmp",
+    ".gif",
+    ".heic",
+    ".heif",
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".svg",
+    ".tif",
+    ".tiff",
+    ".webp",
+  ] as const,
   bootstrapExtensions: [".html", ".htm", ".docx"] as const,
 });
 

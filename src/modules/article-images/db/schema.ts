@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   blob,
+  check,
   index,
   integer,
   sqliteTable,
@@ -8,7 +9,7 @@ import {
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
 
-import { articles } from "@/modules/builder/db/schema";
+import { articles } from "../../builder/db/schema";
 
 const timestamp = (name: string) =>
   integer(name, { mode: "timestamp_ms" })
@@ -41,6 +42,12 @@ export const articleImages = sqliteTable(
     index("article_images_article_upload_idx").on(
       table.articleId,
       table.needsUpload,
+    ),
+    check("article_images_position_check", sql`${table.position} > 0`),
+    check("article_images_size_bytes_check", sql`${table.sizeBytes} > 0`),
+    check(
+      "article_images_needs_upload_check",
+      sql`${table.needsUpload} IN (0, 1)`,
     ),
   ],
 );

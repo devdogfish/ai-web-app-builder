@@ -2,7 +2,12 @@ import "server-only";
 
 import { z } from "zod";
 
+import { ArticleImageRepository } from "../../article-images/repository";
 import { ARTICLE_SYSTEM_INSTRUCTIONS } from "../ai/prompt";
+import {
+  buildArticleEditRepairPrompt,
+  prepareArticleModelEdit,
+} from "../ai/edit-repair";
 import { createArticleModelFromEnv } from "../ai/server";
 import { ArticleModelError, type ArticleModelResult } from "../ai/types";
 import { BUILDER_UPLOAD_LIMITS } from "../config/builder";
@@ -37,6 +42,7 @@ import { builderErrorDetails } from "./errors";
 import { getArticleRefinementCoordinator } from "./refinement-lock";
 import {
   builderComponentModelContext,
+  displayManagedSourceForModel,
   prepareManagedSourceForSave,
 } from "./component-integration";
 
@@ -65,9 +71,6 @@ export async function runBuilderRefinement(
   reference: unknown,
   request: unknown,
   signal?: AbortSignal,
-  internalOptions: {
-    allowPreviouslyAttachedUploadIds?: readonly string[];
-  } = {},
 ): Promise<BuilderWorkspace> {
   const input = refinementRequestSchema.parse({
     environment: reference,
@@ -97,9 +100,7 @@ export async function runBuilderRefinement(
         );
         if (
           !upload ||
-          (upload.messageId &&
-            !internalOptions.allowPreviouslyAttachedUploadIds?.includes(id) &&
-            !isRetryableUpload(workspace, upload.messageId))
+          (upload.messageId && !isRetryableUpload(workspace, upload.messageId))
         ) {
           throw new BuilderRefinementError("A selected upload is unavailable.");
         }
@@ -145,10 +146,9 @@ export async function runBuilderRefinement(
             id: upload.id,
             name: upload.name,
             mediaType: upload.mediaType,
-            text:
-              docx
-                ? `${uploadText}\n\n${docxVisualContextNote(docxPages.length)}`
-                : uploadText,
+            text: docx
+              ? `${uploadText}\n\n${docxVisualContextNote(docxPages.length)}`
+              : uploadText,
             dataUrl:
               stored && image
                 ? `data:${imageMediaType(upload.name)};base64,${Buffer.from(stored.bytes).toString("base64")}`
@@ -157,10 +157,7 @@ export async function runBuilderRefinement(
           };
         }),
       );
-      const requestPrompt = resolveRefinementPrompt(
-        input.prompt,
-        input.uploadIds,
-      );
+      const requestPrompt = resolveRefinementPrompt(input.prompt);
       const effectivePrompt = input.runtimeError
         ? `${requestPrompt}\n\nPreview runtime error to fix:\n${input.runtimeError}`
         : requestPrompt;
@@ -187,6 +184,9 @@ export async function runBuilderRefinement(
       let componentContext = builderComponentModelContext(
         workspace.currentVersion.html,
         componentRequestText,
+      );
+      const modelArticleSource = displayManagedSourceForModel(
+        workspace.currentVersion.html,
       );
       let contextPlan = componentContextPlan(componentContext);
       assertContextPlanFits(contextPlan);
@@ -217,12 +217,16 @@ export async function runBuilderRefinement(
         throwIfCancelled(signal);
         const model = createArticleModelFromEnv();
         let modelResult: ArticleModelResult | null = null;
-        const explicitlyRequestedTypes = new Set<string>();
-        for (let disclosureRound = 0; disclosureRound <= 2; disclosureRound += 1) {
+        const explicitlyRequestedTags = new Set<string>();
+        for (
+          let disclosureRound = 0;
+          disclosureRound <= 2;
+          disclosureRound += 1
+        ) {
           modelResult = null;
           for await (const event of model.stream(
             {
-              currentArticleHtml: workspace.currentVersion.html,
+              currentArticleHtml: modelArticleSource,
               currentPrompt: effectivePrompt,
               selectedUploadExtracts: selectedUploads,
               recentRelevantTurns: contextPlan.messages.map((message) => ({
@@ -254,21 +258,21 @@ export async function runBuilderRefinement(
               "The AI repeatedly requested Component specs without completing the response.",
             );
           }
-          const unloadedTypes = modelResult.types.filter(
-            (type) => !componentContext.loadedTypes.includes(type),
+          const unloadedTags = modelResult.tags.filter(
+            (tag) => !componentContext.loadedTags.includes(tag),
           );
-          if (unloadedTypes.length === 0) {
+          if (unloadedTags.length === 0) {
             throw new ArticleModelError(
               "malformed_response",
               "The AI requested Component specs that were already loaded.",
             );
           }
-          unloadedTypes.forEach((type) => explicitlyRequestedTypes.add(type));
+          unloadedTags.forEach((tag) => explicitlyRequestedTags.add(tag));
           try {
             componentContext = builderComponentModelContext(
               workspace.currentVersion.html,
               componentRequestText,
-              [...explicitlyRequestedTypes],
+              [...explicitlyRequestedTags],
             );
           } catch (error) {
             throw new ArticleModelError(
@@ -292,10 +296,49 @@ export async function runBuilderRefinement(
         }
 
         if (modelResult.action === "edit") {
-          const prepared = await prepareManagedSourceForSave(
-            modelResult.articleHtml,
-            workspace.currentVersion.html,
-          );
+          const edit = await prepareArticleModelEdit(modelResult, {
+            prepare: (source) =>
+              prepareManagedSourceForSave(
+                source,
+                workspace.currentVersion.html,
+              ),
+            repair: async ({ error }) => {
+              const repairPrompt = buildArticleEditRepairPrompt(
+                effectivePrompt,
+                error,
+              );
+              let repairedResult: ArticleModelResult | null = null;
+              for await (const event of model.stream(
+                {
+                  currentArticleHtml: modelArticleSource,
+                  currentPrompt: repairPrompt,
+                  selectedUploadExtracts: selectedUploads,
+                  recentRelevantTurns: contextPlan.messages.map((message) => ({
+                    role: message.role,
+                    content: message.text,
+                  })),
+                  compactMemory,
+                  environmentContext: environment,
+                  componentIndex: componentContext.index,
+                  componentSpecs: componentContext.specs,
+                },
+                { signal },
+              )) {
+                if (event.type === "text-delta" && firstOutputAt === null) {
+                  firstOutputAt = Date.now();
+                }
+                if (event.type === "finish") repairedResult = event.result;
+              }
+              throwIfCancelled(signal);
+              if (!repairedResult || repairedResult.action !== "edit") {
+                throw new ArticleModelError(
+                  "malformed_response",
+                  "The AI did not return a corrected Article Source.",
+                );
+              }
+              return repairedResult;
+            },
+          });
           throwIfCancelled(signal);
           const timing = measureTurnTiming(startedAt, firstOutputAt);
           repository.commitAssistantVersion({
@@ -303,10 +346,10 @@ export async function runBuilderRefinement(
             expectedChatId: workspace.chat.id,
             expectedVersionId: workspace.currentVersion.id,
             expectedVersionSha256: workspace.currentVersion.sha256,
-            html: prepared.source,
-            hostHtml: prepared.compiledHtml,
-            response: modelResult.response,
-            summary: modelResult.summary,
+            html: edit.prepared.source,
+            hostHtml: edit.prepared.compiledHtml,
+            response: edit.result.response,
+            summary: edit.result.summary,
             ...timing,
           });
         } else {
@@ -330,6 +373,9 @@ export async function runBuilderRefinement(
         return toBuilderWorkspace(
           environment,
           repository.getWorkspace(environment.articleId),
+          new ArticleImageRepository(repository.sqlite).list(
+            environment.articleId,
+          ),
         );
       } catch (error) {
         const publicError = builderErrorDetails(error, {
@@ -351,6 +397,9 @@ export async function runBuilderRefinement(
           return toBuilderWorkspace(
             environment,
             repository.getWorkspace(environment.articleId),
+            new ArticleImageRepository(repository.sqlite).list(
+              environment.articleId,
+            ),
           );
         }
         throw new BuilderRefinementError(publicError.message);

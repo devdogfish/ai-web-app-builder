@@ -10,6 +10,7 @@ const image: BuilderArticleImage = {
   mediaType: "image/png",
   sizeBytes: 42,
   needsUpload: true,
+  revision: "2026-08-15T12:00:00.000Z",
   productionPath: "/media/article-01.png",
   productionUrl: "https://cms.example.test/media/article-01.png",
   databasePreviewUrl: "/api/articles/article-1/images/image-1",

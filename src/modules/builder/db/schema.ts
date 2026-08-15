@@ -1,5 +1,6 @@
 import { relations, sql } from "drizzle-orm";
 import {
+  check,
   index,
   integer,
   sqliteTable,
@@ -66,6 +67,18 @@ export const messages = sqliteTable(
   },
   (table) => [
     index("messages_chat_created_idx").on(table.chatId, table.createdAt),
+    check(
+      "messages_role_check",
+      sql`${table.role} IN ('user', 'assistant', 'system')`,
+    ),
+    check(
+      "messages_kind_check",
+      sql`${table.kind} IN ('chat', 'source_apply', 'rewind', 'baseline')`,
+    ),
+    check(
+      "messages_status_check",
+      sql`${table.status} IN ('complete', 'failed', 'stopped')`,
+    ),
   ],
 );
 
@@ -94,6 +107,10 @@ export const versions = sqliteTable(
     uniqueIndex("versions_chat_number_unique").on(table.chatId, table.number),
     index("versions_chat_created_idx").on(table.chatId, table.createdAt),
     index("versions_message_idx").on(table.messageId),
+    check(
+      "versions_source_check",
+      sql`${table.source} IN ('baseline', 'assistant', 'manual', 'rewind')`,
+    ),
   ],
 );
 
@@ -143,6 +160,7 @@ export const uploads = sqliteTable(
   (table) => [
     index("uploads_chat_created_idx").on(table.chatId, table.createdAt),
     index("uploads_message_idx").on(table.messageId),
+    check("uploads_size_bytes_check", sql`${table.sizeBytes} >= 0`),
   ],
 );
 

@@ -74,13 +74,44 @@ describe("Builder module boundary", () => {
     ).toBeLessThanOrEqual(6);
   });
 
-  it("renders bootstrap images only as message attachments", () => {
+  it("keeps Server Action transaction boundaries in Drizzle", () => {
+    const actions = readWorkspaceFile("src/modules/builder/server/actions.ts");
+
+    expect(actions).not.toContain("repository.sqlite.transaction(");
+    expect(actions).toContain("repository.db.transaction(");
+  });
+
+  it("keeps runtime persistence and schema setup in Drizzle", () => {
+    const repositories = [
+      "src/modules/builder/db/repository.ts",
+      "src/modules/article-images/repository.ts",
+      "src/modules/components/repository.ts",
+    ];
+
+    for (const repository of repositories) {
+      const contents = readWorkspaceFile(repository);
+      expect(contents, repository).toContain("drizzle-orm/better-sqlite3");
+      expect(contents, repository).not.toContain(".prepare(");
+      expect(contents, repository).not.toContain(".exec(");
+    }
+
+    const initializer = readWorkspaceFile(
+      "src/modules/builder/db/initialize.ts",
+    );
+    expect(initializer).toContain("migrate(drizzle(sqlite)");
+    expect(initializer).not.toContain(".exec(");
+    expect(initializer).not.toContain("sqlite_master");
+  });
+
+  it("keeps Article Image management out of the conversation transcript", () => {
     const conversation = readWorkspaceFile(
       "src/modules/builder/components/conversation-panel.tsx",
     );
 
     expect(conversation).not.toContain("ArticleImagesPanel");
     expect(conversation).not.toContain("article-images-panel");
+    expect(conversation).toContain("ArticleImageManagerDialog");
+    expect(conversation).toContain("ArticleImageStackTrigger");
   });
 
   it("uses link semantics for the image viewer open action", () => {

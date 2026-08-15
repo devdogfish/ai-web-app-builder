@@ -1,5 +1,11 @@
 import { sql } from "drizzle-orm";
-import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import {
+  index,
+  integer,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from "drizzle-orm/sqlite-core";
 
 const timestamp = (name: string) =>
   integer(name, { mode: "timestamp_ms" })
@@ -9,9 +15,12 @@ const timestamp = (name: string) =>
 export const componentDefinitions = sqliteTable(
   "component_definitions",
   {
-    type: text("type").primaryKey(),
+    id: text("id").primaryKey(),
+    tag: text("tag").notNull(),
+    name: text("name").notNull(),
     description: text("description").notNull(),
-    htmlTemplate: text("html_template").notNull(),
+    source: text("source").notNull(),
+    compiledSource: text("compiled_source").notNull(),
     schemaJson: text("schema_json").notNull(),
     uiHintsJson: text("ui_hints_json").notNull().default("{}"),
     defaultDataJson: text("default_data_json").notNull().default("{}"),
@@ -20,7 +29,12 @@ export const componentDefinitions = sqliteTable(
     updatedAt: timestamp("updated_at"),
     deletedAt: integer("deleted_at", { mode: "timestamp_ms" }),
   },
-  (table) => [index("component_definitions_deleted_idx").on(table.deletedAt)],
+  (table) => [
+    index("component_definitions_deleted_idx").on(table.deletedAt),
+    uniqueIndex("component_definitions_active_tag_idx")
+      .on(table.tag)
+      .where(sql`${table.deletedAt} IS NULL`),
+  ],
 );
 
 export type ComponentDefinitionRow = typeof componentDefinitions.$inferSelect;

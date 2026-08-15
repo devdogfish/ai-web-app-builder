@@ -1,8 +1,25 @@
 import { describe, expect, it } from "vitest";
 
-import { findManagedComponentReferenceRanges } from "../components/managed-component-source";
+import {
+  findManagedComponentReferenceRanges,
+  managedComponentDisplayTag,
+  readManagedComponentReference,
+} from "../components/managed-component-source";
 
 describe("managed Component source widgets", () => {
+  it("displays the current name-derived tag while retaining the stable ID", () => {
+    expect(
+      managedComponentDisplayTag("component-pk", [
+        {
+          id: "component-pk",
+          tag: "SimpleTabs",
+          name: "Simple Tabs",
+          description: "Tabs.",
+        },
+      ]),
+    ).toBe("SimpleTabs");
+  });
+
   it("finds multiline directives and hides all data", () => {
     const source = `<p>Before</p>
 <Component
@@ -13,7 +30,7 @@ describe("managed Component source widgets", () => {
 
     const [reference] = findManagedComponentReferenceRanges(source);
 
-    expect(reference).toMatchObject({ index: 0, type: "tabs" });
+    expect(reference).toMatchObject({ index: 0, id: "tabs" });
     expect(source.slice(reference.from, reference.to)).toContain("data={{");
     expect(source.slice(reference.from, reference.to)).toContain("A /> B");
   });
@@ -26,8 +43,8 @@ describe("managed Component source widgets", () => {
     ].join("\n");
 
     expect(findManagedComponentReferenceRanges(source)).toMatchObject([
-      { index: 0, type: "attributed-quote" },
-      { index: 1, type: "image-carousel" },
+      { index: 0, id: "attributed-quote" },
+      { index: 1, id: "image-carousel" },
     ]);
   });
 
@@ -38,5 +55,22 @@ describe("managed Component source widgets", () => {
     ].join("\n");
 
     expect(findManagedComponentReferenceRanges(source)).toEqual([]);
+  });
+
+  it("does not mistake paired Component markup with nested self-closing HTML for a chip", () => {
+    const source = '<Component type="simple-quote"><img />';
+
+    expect(findManagedComponentReferenceRanges(source)).toEqual([]);
+  });
+
+  it("reads a valid chip while another Component edit is incomplete", () => {
+    const valid = '<Component type="simple-quote" data={{}} />';
+    const source = `${valid}\n<Component type="tabs" data={{`;
+    const [selected] = findManagedComponentReferenceRanges(source);
+
+    expect(readManagedComponentReference(source, selected!)).toMatchObject({
+      id: "simple-quote",
+      raw: valid,
+    });
   });
 });

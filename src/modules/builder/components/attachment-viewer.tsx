@@ -173,7 +173,7 @@ export function AttachmentViewer({
               <Tabs
                 value={tab}
                 onValueChange={setTab}
-                className="min-h-0 gap-0"
+                className="min-h-0 min-w-0 gap-0"
               >
                 <div className="flex h-11 shrink-0 items-center border-b bg-muted/30 px-4">
                   <TabsList aria-label="Attachment view">
@@ -191,13 +191,13 @@ export function AttachmentViewer({
                 </div>
                 <TabsContent
                   value="original"
-                  className="min-h-0 overflow-hidden"
+                  className="min-h-0 min-w-0 overflow-hidden"
                 >
                   <WordDocumentView preview={activePreview} />
                 </TabsContent>
                 <TabsContent
                   value="payload"
-                  className="min-h-0 overflow-hidden"
+                  className="min-h-0 min-w-0 overflow-hidden"
                 >
                   <ModelPayloadView
                     payload={activePreview.modelPayload}
@@ -206,7 +206,7 @@ export function AttachmentViewer({
                 </TabsContent>
               </Tabs>
             ) : (
-              <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
+              <div className="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)]">
                 <div className="flex h-11 items-center border-b bg-muted/30 px-4">
                   <PayloadActions
                     view={payloadView}
@@ -547,10 +547,10 @@ function ModelPayloadView({
   const displayedPayload = view === "formatted" ? formattedPayload : payload;
 
   return (
-    <section className="h-full min-h-0 overflow-hidden bg-background">
+    <section className="h-full min-h-0 min-w-0 overflow-hidden bg-background">
       <SourceEditor
         ariaLabel={`${view === "formatted" ? "Formatted" : "Raw"} LLM payload`}
-        className="min-h-0"
+        className="min-h-0 min-w-0"
         value={displayedPayload}
         onChange={() => undefined}
         readOnly

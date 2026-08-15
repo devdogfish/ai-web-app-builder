@@ -40,7 +40,7 @@ export function ComponentInstanceDialog({
     // This intentionally resets disposable form state when another instance opens.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setDraft(data);
-  }, [data, definition?.type, open]);
+  }, [data, definition?.id, open]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -49,7 +49,7 @@ export function ComponentInstanceDialog({
           <div className="flex items-center gap-2">
             <BracesIcon className="size-4 text-muted-foreground" />
             <DialogTitle>
-              {definition ? `Edit ${definition.type}` : "Edit Component"}
+              {definition ? `Edit ${definition.name}` : "Edit Component"}
             </DialogTitle>
             <Badge variant="secondary">Managed</Badge>
           </div>

@@ -15,12 +15,12 @@ function escapeAttribute(value: string): string {
 export interface PreviewDocumentOptions {
   siteProfile?: PreviewSiteProfileId;
   assetOrigin?: string;
-  imageFallbacks?: readonly PreviewImageFallback[];
+  imageProxies?: readonly PreviewImageProxy[];
 }
 
-export interface PreviewImageFallback {
+export interface PreviewImageProxy {
   productionPath: string;
-  databaseUrl: string;
+  previewUrl: string;
 }
 
 function assetOrigin(value: string | undefined): string | null {
@@ -81,7 +81,6 @@ function previewHead(
   policy: WebsiteAssetPolicy,
   localOrigin: string | null,
   siteAssets: string,
-  imageFallbacks: readonly PreviewImageFallback[],
   allowLocalSiteScripts: boolean,
 ): string {
   const baseHref = `${policy.cmsOrigin}/`;
@@ -107,24 +106,23 @@ function previewHead(
     `<meta http-equiv="Content-Security-Policy" content="${escapeAttribute(previewCsp)}">`,
     '<meta name="referrer" content="no-referrer">',
     `<base href="${escapeAttribute(baseHref)}">`,
-    imageFallbackScript(imageFallbacks),
     `<script>(function(){const send=(kind,value)=>parent.postMessage({source:"article-builder-preview",kind,value},"*");window.addEventListener("error",e=>{const siteAssetError=e.message==="Script error."||String(e.filename||"").includes("/preview-sites/");if(!siteAssetError)send("runtime-error",e.message||"Unknown runtime error")});window.addEventListener("unhandledrejection",e=>send("runtime-error",String(e.reason||"Unhandled promise rejection")));document.addEventListener("submit",e=>{e.preventDefault();send("runtime-error","Form submission is blocked in Preview.")},true);})();</script>`,
     siteAssets,
   ].join("");
 }
 
-function imageFallbackScript(
-  imageFallbacks: readonly PreviewImageFallback[],
+function imageProxyScript(
+  imageProxies: readonly PreviewImageProxy[],
 ): string {
-  if (imageFallbacks.length === 0) return "";
-  const fallbackMap = Object.fromEntries(
-    imageFallbacks.map((fallback) => [
-      fallback.productionPath,
-      fallback.databaseUrl,
+  if (imageProxies.length === 0) return "";
+  const proxyMap = Object.fromEntries(
+    imageProxies.map((proxy) => [
+      proxy.productionPath,
+      proxy.previewUrl,
     ]),
   );
-  const serialized = JSON.stringify(fallbackMap).replaceAll("<", "\\u003c");
-  return `<script>(function(){const fallbacks=${serialized};document.addEventListener("error",function(event){const image=event.target;if(!(image instanceof HTMLImageElement)||image.dataset.databaseFallbackAttempted)return;let path;try{path=new URL(image.currentSrc||image.src,document.baseURI).pathname}catch{return}const fallback=fallbacks[path];if(!fallback)return;image.dataset.databaseFallbackAttempted="true";image.src=fallback},true)})();</script>`;
+  const serialized = JSON.stringify(proxyMap).replaceAll("<", "\\u003c");
+  return `<script>(function(){const proxies=${serialized};const apply=image=>{if(!(image instanceof HTMLImageElement)||image.dataset.previewProxyApplied)return;let path;try{path=new URL(image.getAttribute("src")||"",document.baseURI).pathname}catch{return}const proxy=proxies[path];if(!proxy)return;image.dataset.previewProxyApplied="true";image.removeAttribute("srcset");image.closest("picture")?.querySelectorAll("source").forEach(source=>source.removeAttribute("srcset"));image.addEventListener("error",()=>parent.postMessage({source:"article-builder-preview",kind:"runtime-error",value:"Preview could not load "+path+" from CMS or database."},"*"),{once:true});image.src=proxy};document.querySelectorAll("img").forEach(apply);new MutationObserver(records=>records.forEach(record=>record.addedNodes.forEach(node=>{if(node instanceof HTMLImageElement)apply(node);else if(node instanceof Element)node.querySelectorAll("img").forEach(apply)}))).observe(document.body,{childList:true,subtree:true})})();</script>`;
 }
 
 export function createPreviewDocument(
@@ -140,10 +138,9 @@ export function createPreviewDocument(
     policy,
     localOrigin,
     siteAssets.head,
-    options.imageFallbacks ?? [],
     hasSiteAssets,
   );
   // A fixed outer envelope makes the CSP the first parsed policy even when
   // Source contains misleading comments, malformed head tags, or a full doc.
-  return `<!doctype html><html><head>${injectedHead}</head><body>${source}${siteAssets.body}</body></html>`;
+  return `<!doctype html><html><head>${injectedHead}</head><body>${source}${imageProxyScript(options.imageProxies ?? [])}${siteAssets.body}</body></html>`;
 }

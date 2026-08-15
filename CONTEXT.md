@@ -29,19 +29,55 @@ An Article Block whose declared data is rendered through a locked Component. Its
 _Avoid_: Locked component, live component
 
 **Component**:
-A reusable, self-contained HTML snippet with defined variable inputs. It contains its exact shell and any required inline styling or behavior.
-_Avoid_: Recipe, template
+A reusable definition authored as React/JSX and rendered by the Builder into self-contained ordinary HTML. It contains its exact shell and any required inline styling or behavior.
+_Avoid_: Recipe, HTML template
+
+**Component Author**:
+A person who supplies a Component's React/JSX source and identifies its editable Component Props. Any user may be a Component Author; they do not separately define schemas or UI hints.
+_Avoid_: Schema author, contract author
+
+**Article Editor**:
+A person who edits an Article and its Managed Blocks through generated controls. They edit Component Prop values, never Component Source or its internal data contract.
+_Avoid_: Component Author, schema editor
+
+**Component Source**:
+The self-contained, single-file React/TSX representation edited by a Component Author and compiled only inside the Builder. It may define local helpers but has no imports; React is not included in Article HTML.
+_Avoid_: HTML blob, Component HTML
+
+**Component Name**:
+The mutable, human-readable label shown for a Component. Its PascalCase form is the Component Tag; it is independent of the exported React function name.
+_Avoid_: Component Tag, function name
+
+**Component Description**:
+Mutable author-supplied guidance describing when a Component should be used. It is stored as Component metadata rather than inferred from source after creation.
+_Avoid_: Source documentation
+
+**Component Behavior**:
+Optional browser logic authored within Component Source and emitted directly into Article HTML as self-contained inline JavaScript. It has no external runtime or script dependency.
+_Avoid_: React runtime, external script
+
+**Component Prop**:
+A named editable input declared through the Component Source's TypeScript props. Component Props collectively determine the generated visual instance editor.
+_Avoid_: Placeholder, template variable
+
+**Component Default**:
+An optional initial value declared for a Component Prop within Component Source. It pre-fills new Managed Blocks; a Component Author need not provide it.
+_Avoid_: Default-data JSON, sample data
 
 **Component Data Schema**:
-The typed definition and editing hints for a Component's variable data. It validates Managed Block data and generates the default visual instance editor.
+The internal typed definition and editing hints derived deterministically from Component Source's TypeScript props. It validates Managed Block data and generates the visual instance editor but is never authored separately.
 _Avoid_: Props form, component inputs
 
-**Component Type**:
-The unique name selecting a Component, such as `tabs`. All managed references use the Component's current definition.
-_Avoid_: Recipe Key, Component version
+**Component Tag**:
+The mutable, human-facing PascalCase form of a Component Name, such as `SimpleTabs`. Active Component Tags are unique and change whenever their Component Name changes.
+_Avoid_: Component ID, Component Name, Component Type, function name
+
+**Component ID**:
+The immutable internal primary key selecting a Component. Managed references use this identity, so changing a Component Name or Tag never changes what they resolve to.
+_Avoid_: Component Type, Component Name
 
 **Component Reference**:
-A self-closing Article Source element containing exactly a Component Type and a restricted data object for one Managed Block. Rich HTML values use unescaped `html` template literals rather than JSON strings.
+A Managed Block reference whose immutable Component ID and restricted data object remain internal. Article Editors and Component Authors see its current Component Tag as an import-free self-closing element such as `<SimpleTabs />`; rich HTML values use unescaped `html` template literals rather than JSON strings.
 _Avoid_: Component Directive, JSX component
 
 **Detached Block**:
@@ -53,7 +89,7 @@ An image owned by an Article and held at an explicit position in the Article's c
 _Avoid_: Chat upload, reference upload, attachment
 
 **Needs Upload**:
-A marker on an Article Image whose content or position requires its production file to be uploaded again. An Article needs image upload whenever any of its Article Images carries this marker; the marker does not determine which image Preview displays.
+A marker on an Article Image whose database content or position is newer than its production file and requires upload again. Preview displays the database image while this marker is set. An Article needs image upload whenever any of its Article Images carries this marker.
 _Avoid_: Stale, unpublished
 
 **Production Image**:

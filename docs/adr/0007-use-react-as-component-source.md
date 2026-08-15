@@ -1,0 +1,3 @@
+# Use React/JSX as Component Source without a browser runtime
+
+Component Authors write standard React/TSX with typed props rather than a bespoke HTML template language or separate JSON contracts. The Builder derives its internal data contract and neutral fallback values deterministically from those TypeScript props; authors may declare ordinary TypeScript defaults when a Component benefits from tailored initial content. The Builder renders Component Source into standalone, copyable Article HTML: React and Babel are authoring/compilation dependencies only, while browser behavior must be emitted as self-contained inline JavaScript with no external runtime or script dependency.

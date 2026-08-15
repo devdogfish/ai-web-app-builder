@@ -44,6 +44,10 @@ import {
   AttachmentViewer,
   type AttachmentViewerTarget,
 } from "@/modules/builder/components/attachment-viewer";
+import {
+  ArticleImageManagerDialog,
+  ArticleImageStackTrigger,
+} from "@/modules/builder/components/article-image-manager-dialog";
 import { Button } from "@/modules/builder/ui/button";
 import { Card, CardContent, CardFooter } from "@/modules/builder/ui/card";
 import { Field, FieldLabel } from "@/modules/builder/ui/field";
@@ -67,6 +71,7 @@ import {
 } from "@/modules/builder/core/contracts";
 import { getUploadPreview } from "@/modules/builder/core/client";
 import { hasRefinementInput } from "@/modules/builder/core/refinement-request";
+import { partitionContextFiles } from "@/modules/builder/core/context-file-routing";
 import {
   countVersionDiffLines,
   type VersionDiffStats,
@@ -91,6 +96,10 @@ export function ConversationPanel({
   onPromptChange,
   onSelectedUploadIdsChange,
   onUpload,
+  onAddArticleImages,
+  onReorderArticleImages,
+  onRemoveArticleImage,
+  onConvertArticleImageToJpeg,
   onSend,
   onStop,
   onViewVersionDiff,
@@ -109,6 +118,10 @@ export function ConversationPanel({
   onPromptChange: (prompt: string) => void;
   onSelectedUploadIdsChange: (ids: string[]) => void;
   onUpload: (files: File[]) => Promise<void> | void;
+  onAddArticleImages: (files: File[]) => Promise<boolean>;
+  onReorderArticleImages: (orderedImageIds: string[]) => Promise<boolean>;
+  onRemoveArticleImage: (imageId: string) => Promise<boolean>;
+  onConvertArticleImageToJpeg: (imageId: string) => Promise<boolean>;
   onSend: () => void;
   onStop: () => void;
   onViewVersionDiff: (id: string) => void;
@@ -123,6 +136,7 @@ export function ConversationPanel({
   const [attachmentTarget, setAttachmentTarget] =
     useState<AttachmentViewerTarget | null>(null);
   const [attachmentViewerOpen, setAttachmentViewerOpen] = useState(false);
+  const [imageManagerOpen, setImageManagerOpen] = useState(false);
 
   function openAttachment(target: AttachmentViewerTarget) {
     setAttachmentTarget(target);
@@ -159,8 +173,17 @@ export function ConversationPanel({
   }
 
   async function uploadFiles(files: File[]) {
-    await onUpload(files);
-    promptRef.current?.focus();
+    const { images, references } = partitionContextFiles(files);
+    let openedImageManager = false;
+    if (images.length > 0) {
+      const added = await onAddArticleImages(images);
+      if (added) {
+        openedImageManager = true;
+        setImageManagerOpen(true);
+      }
+    }
+    if (references.length > 0) await onUpload(references);
+    if (!openedImageManager) promptRef.current?.focus();
   }
 
   useLayoutEffect(() => {
@@ -197,12 +220,40 @@ export function ConversationPanel({
   });
 
   return (
-    <Card className="min-h-svh gap-0 rounded-none bg-muted/55 py-0 ring-0 lg:h-full lg:min-h-0">
+    <Card
+      className="relative min-h-svh gap-0 rounded-none bg-muted/55 py-0 ring-0 lg:h-full lg:min-h-0"
+      onDragEnter={(event) => {
+        event.preventDefault();
+        if (!event.dataTransfer.types.includes("Files") || generating) return;
+        dragDepthRef.current += 1;
+        setIsDraggingFiles(true);
+      }}
+      onDragOver={(event) => {
+        if (!event.dataTransfer.types.includes("Files") || generating) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
+      }}
+      onDragLeave={(event) => {
+        event.preventDefault();
+        dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+        if (dragDepthRef.current === 0) setIsDraggingFiles(false);
+      }}
+      onDrop={(event) => {
+        event.preventDefault();
+        const files = Array.from(event.dataTransfer.files);
+        resetDragState();
+        if (!generating && files.length > 0) void uploadFiles(files);
+      }}
+    >
       <header className="flex h-12 shrink-0 items-center justify-between border-b bg-white pr-3 pl-12">
         <p className="min-w-0 truncate text-sm font-medium">
           {environment.articleTitle}
         </p>
-        <div className="shrink-0">
+        <div className="flex shrink-0 items-center gap-1">
+          <ArticleImageStackTrigger
+            images={workspace.articleImages}
+            onClick={() => setImageManagerOpen(true)}
+          />
           <AlertDialog>
             <AlertDialogTrigger
               render={
@@ -416,41 +467,11 @@ export function ConversationPanel({
             </AttachmentGroup>
           ) : null}
           <form
-            className="relative"
-            onDragEnter={(event) => {
-              event.preventDefault();
-              if (!event.dataTransfer.types.includes("Files") || generating) {
-                return;
-              }
-              dragDepthRef.current += 1;
-              setIsDraggingFiles(true);
-            }}
-            onDragOver={(event) => {
-              if (!event.dataTransfer.types.includes("Files") || generating) {
-                return;
-              }
-              event.preventDefault();
-              event.dataTransfer.dropEffect = "copy";
-            }}
-            onDragLeave={(event) => {
-              event.preventDefault();
-              dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
-              if (dragDepthRef.current === 0) setIsDraggingFiles(false);
-            }}
-            onDrop={(event) => {
-              event.preventDefault();
-              const files = Array.from(event.dataTransfer.files);
-              resetDragState();
-              if (!generating && files.length > 0) void uploadFiles(files);
-            }}
             onSubmit={(event) => {
               event.preventDefault();
               onSend();
             }}
           >
-            <span className="sr-only" aria-live="polite">
-              {isDraggingFiles ? "Drop files to attach." : ""}
-            </span>
             <Field>
               <FieldLabel htmlFor="builder-prompt" className="sr-only">
                 Refinement request
@@ -474,7 +495,7 @@ export function ConversationPanel({
                     type="button"
                     size="icon-sm"
                     className="size-8 rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground"
-                    aria-label="Add reference uploads"
+                    aria-label="Add files or article images"
                     disabled={generating}
                     onClick={() => uploadRef.current?.click()}
                   >
@@ -591,22 +612,13 @@ export function ConversationPanel({
                 </InputGroupAddon>
               </InputGroup>
             </Field>
-            {isDraggingFiles ? (
-              <div
-                aria-hidden="true"
-                className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-xl border-2 border-dashed border-primary bg-background/95 text-sm font-medium text-foreground shadow-sm"
-              >
-                <PaperclipIcon className="mr-2 size-4" />
-                Drop files to attach
-              </div>
-            ) : null}
           </form>
           <input
             ref={uploadRef}
             type="file"
             multiple
             className="hidden"
-            accept=".html,.htm,.txt,.md,.pdf,.docx,.css,.js,.png,.jpg,.jpeg,.webp,.gif,.svg"
+            accept=".html,.htm,.txt,.md,.pdf,.docx,.css,.js,image/*,.avif,.bmp,.heic,.heif,.tif,.tiff"
             onChange={(event) => {
               const files = Array.from(event.currentTarget.files ?? []);
               event.currentTarget.value = "";
@@ -623,6 +635,35 @@ export function ConversationPanel({
         articleImages={workspace.articleImages}
         onOpenChange={setAttachmentViewerOpen}
       />
+      <ArticleImageManagerDialog
+        open={imageManagerOpen}
+        images={workspace.articleImages}
+        articleSource={workspace.articleHtml}
+        disabled={generating}
+        onOpenChange={setImageManagerOpen}
+        onAdd={onAddArticleImages}
+        onReorder={onReorderArticleImages}
+        onRemove={onRemoveArticleImage}
+        onConvertToJpeg={onConvertArticleImageToJpeg}
+      />
+      <span className="sr-only" aria-live="polite">
+        {isDraggingFiles ? "Drop images or attach files." : ""}
+      </span>
+      {isDraggingFiles ? (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center bg-background/90 p-3 text-foreground backdrop-blur-sm"
+        >
+          <div className="flex size-full flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed border-primary/70 bg-background/70 shadow-sm">
+            <span className="flex size-11 items-center justify-center rounded-full border bg-background shadow-sm">
+              <PaperclipIcon className="size-5" />
+            </span>
+            <span className="text-sm font-medium">
+              Drop images or attach files
+            </span>
+          </div>
+        </div>
+      ) : null}
     </Card>
   );
 }

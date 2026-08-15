@@ -1,8 +1,6 @@
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue =
-  | JsonPrimitive
-  | JsonValue[]
-  | { [key: string]: JsonValue };
+  JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 
 export interface StringFieldSchema {
   type: "string";
@@ -100,17 +98,25 @@ export type ComponentUiHints = Record<string, ComponentFieldUiHint>;
 export type ComponentData = Record<string, unknown>;
 
 export interface ComponentDefinitionInput {
-  type: string;
-  description: string;
-  /** Self-contained HTML. Inline style and script tags are intentionally allowed. */
-  htmlTemplate: string;
-  schema: ComponentSchema;
-  uiHints?: ComponentUiHints;
-  defaultData?: ComponentData;
-  sampleData?: ComponentData;
+  /** Human-readable metadata. Omitted values are derived for legacy callers. */
+  name?: string;
+  description?: string;
+  /** Self-contained React/TSX source. Imports and browser React APIs are forbidden. */
+  source: string;
 }
 
-export interface ComponentDefinition extends ComponentDefinitionInput {
+export interface ComponentDefinition {
+  /** Immutable internal primary key used by managed references. */
+  id: string;
+  /** Mutable human-facing PascalCase element name derived from Component Name. */
+  tag: string;
+  /** Mutable human-readable name. */
+  name: string;
+  description: string;
+  source: string;
+  /** Transpiled CommonJS retained as an internal render artifact. */
+  compiledSource: string;
+  schema: ComponentSchema;
   uiHints: ComponentUiHints;
   defaultData: ComponentData;
   sampleData: ComponentData;
@@ -120,12 +126,27 @@ export interface ComponentDefinition extends ComponentDefinitionInput {
 }
 
 export interface ComponentSummary {
-  type: string;
+  id: string;
+  tag: string;
+  name: string;
   description: string;
 }
 
+export interface ComponentAuthoringPreview {
+  source: string;
+  tag: string;
+  name: string;
+  description: string;
+  schema: ComponentSchema;
+  uiHints: ComponentUiHints;
+  defaultData: ComponentData;
+  html: string;
+}
+
 export interface ComponentSpec {
-  type: string;
+  id: string;
+  tag: string;
+  name: string;
   description: string;
   schema: ComponentSchema;
   uiHints: ComponentUiHints;
@@ -156,8 +177,10 @@ export interface ComponentDataValidation {
 export class ComponentValidationError extends Error {
   constructor(
     public readonly code:
-      | "invalid_type"
+      | "invalid_tag"
+      | "invalid_name"
       | "invalid_description"
+      | "invalid_source"
       | "invalid_template"
       | "invalid_schema"
       | "invalid_ui_hints"

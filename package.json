@@ -19,6 +19,8 @@
     "@base-ui/react": "^1.7.0",
     "@codemirror/commands": "^6.10.4",
     "@codemirror/lang-html": "^6.4.12",
+    "@codemirror/lang-javascript": "^6.2.5",
+    "@codemirror/lint": "^6.9.7",
     "@codemirror/merge": "^6.12.2",
     "@codemirror/search": "^6.7.1",
     "@codemirror/state": "^6.7.1",
@@ -35,6 +37,7 @@
     "next-themes": "^0.4.6",
     "pdf-parse": "^2.4.5",
     "prettier": "^3.9.6",
+    "quickjs-emscripten": "^0.32.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "sanitize-html": "^2.17.7",
@@ -56,7 +59,7 @@
     "eslint": "^9.39.5",
     "eslint-config-next": "^16.3.1",
     "tailwindcss": "^4.3.3",
-    "typescript": "^5.9.3",
+    "typescript": "5.9.3",
     "vitest": "^4.1.10"
   },
   "trustedDependencies": [

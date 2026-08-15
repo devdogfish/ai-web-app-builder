@@ -1,6 +1,14 @@
 import { randomUUID } from "node:crypto";
 
 import type Database from "better-sqlite3";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import {
+  drizzle,
+  type BetterSQLite3Database,
+} from "drizzle-orm/better-sqlite3";
+
+import { articles } from "../builder/db/schema";
+import { articleImages, type ArticleImageRow } from "./db/schema";
 
 import type {
   ArticleImage,
@@ -8,18 +16,9 @@ import type {
   NewArticleImage,
 } from "./contracts";
 
-interface ArticleImageDatabaseRow {
-  id: string;
-  article_id: string;
-  position: number;
-  original_name: string;
-  media_type: string;
-  size_bytes: number;
-  bytes: Buffer;
-  needs_upload: number;
-  created_at: number;
-  updated_at: number;
-}
+const schema = { articles, articleImages };
+
+type ArticleImageDatabase = BetterSQLite3Database<typeof schema>;
 
 export type ArticleImageRepositoryErrorCode =
   "article_not_found" | "image_not_found" | "invalid_file" | "invalid_order";
@@ -46,6 +45,7 @@ export interface ArticleImageRepositoryOptions {
 export class ArticleImageRepository {
   private readonly createId: () => string;
   private readonly now: () => Date;
+  private readonly db: ArticleImageDatabase;
 
   constructor(
     private readonly sqlite: Database.Database,
@@ -53,6 +53,7 @@ export class ArticleImageRepository {
   ) {
     this.createId = options.createId ?? randomUUID;
     this.now = options.now ?? (() => new Date());
+    this.db = drizzle(this.sqlite, { schema });
   }
 
   list(articleId: string): ArticleImage[] {
@@ -60,15 +61,31 @@ export class ArticleImageRepository {
   }
 
   listNeedingUpload(articleId: string): ArticleImage[] {
-    return this.rows(articleId)
-      .filter((row) => row.needs_upload === 1)
+    return this.db
+      .select()
+      .from(articleImages)
+      .where(
+        and(
+          eq(articleImages.articleId, articleId),
+          eq(articleImages.needsUpload, true),
+        ),
+      )
+      .orderBy(asc(articleImages.position))
+      .all()
       .map(toArticleImage);
   }
 
   getBinary(articleId: string, imageId: string): ArticleImageBinary {
-    const row = this.sqlite
-      .prepare(`SELECT * FROM article_images WHERE article_id = ? AND id = ?`)
-      .get(articleId, imageId) as ArticleImageDatabaseRow | undefined;
+    const row = this.db
+      .select()
+      .from(articleImages)
+      .where(
+        and(
+          eq(articleImages.articleId, articleId),
+          eq(articleImages.id, imageId),
+        ),
+      )
+      .get();
 
     if (!row) {
       throw new ArticleImageRepositoryError(
@@ -85,32 +102,33 @@ export class ArticleImageRepository {
     this.assertArticleExists(articleId);
     files.forEach(assertValidFile);
 
-    const add = this.sqlite.transaction(() => {
-      const current = this.rows(articleId);
+    this.db.transaction((tx) => {
+      const current = tx
+        .select()
+        .from(articleImages)
+        .where(eq(articleImages.articleId, articleId))
+        .orderBy(asc(articleImages.position))
+        .all();
       const timestamp = this.now().getTime();
-      const insert = this.sqlite.prepare(`
-        INSERT INTO article_images (
-          id, article_id, position, original_name, media_type, size_bytes,
-          bytes, needs_upload, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-      `);
 
       files.forEach((file, index) => {
-        insert.run(
-          this.createId(),
-          articleId,
-          current.length + index + 1,
-          file.name,
-          file.mediaType,
-          file.bytes.byteLength,
-          Buffer.from(file.bytes),
-          timestamp,
-          timestamp,
-        );
+        tx.insert(articleImages)
+          .values({
+            id: this.createId(),
+            articleId,
+            position: current.length + index + 1,
+            originalName: file.name,
+            mediaType: file.mediaType,
+            sizeBytes: file.bytes.byteLength,
+            bytes: Buffer.from(file.bytes),
+            needsUpload: true,
+            createdAt: new Date(timestamp),
+            updatedAt: new Date(timestamp),
+          })
+          .run();
       });
     });
 
-    add();
     return this.list(articleId);
   }
 
@@ -121,23 +139,22 @@ export class ArticleImageRepository {
   ): ArticleImage {
     assertValidFile(file);
     const current = this.getBinary(articleId, imageId);
-    const result = this.sqlite
-      .prepare(
-        `
-        UPDATE article_images
-        SET media_type = ?, size_bytes = ?, bytes = ?, needs_upload = 1,
-            updated_at = ?
-        WHERE article_id = ? AND id = ?
-      `,
+    const result = this.db
+      .update(articleImages)
+      .set({
+        mediaType: file.mediaType,
+        sizeBytes: file.bytes.byteLength,
+        bytes: Buffer.from(file.bytes),
+        needsUpload: true,
+        updatedAt: this.now(),
+      })
+      .where(
+        and(
+          eq(articleImages.articleId, articleId),
+          eq(articleImages.id, imageId),
+        ),
       )
-      .run(
-        file.mediaType,
-        file.bytes.byteLength,
-        Buffer.from(file.bytes),
-        this.now().getTime(),
-        articleId,
-        imageId,
-      );
+      .run();
     if (result.changes !== 1) {
       throw new ArticleImageRepositoryError(
         "image_not_found",
@@ -165,38 +182,39 @@ export class ArticleImageRepository {
     );
     if (changedIds.length === 0) return current.map(toArticleImage);
 
-    const reorder = this.sqlite.transaction(() => {
+    this.db.transaction((tx) => {
       const timestamp = this.now().getTime();
       const offset = current.length + 1;
 
       // Free every positive position first so the unique constraint remains
       // valid while swaps are applied inside this transaction.
-      this.sqlite
-        .prepare(
-          `UPDATE article_images SET position = position + ? WHERE article_id = ?`,
-        )
-        .run(offset, articleId);
+      tx.update(articleImages)
+        .set({ position: sql`${articleImages.position} + ${offset}` })
+        .where(eq(articleImages.articleId, articleId))
+        .run();
 
-      const update = this.sqlite.prepare(`
-        UPDATE article_images
-        SET position = ?,
-            needs_upload = CASE WHEN ? = 1 THEN 1 ELSE needs_upload END,
-            updated_at = ?
-        WHERE article_id = ? AND id = ?
-      `);
       const changed = new Set(changedIds);
       orderedImageIds.forEach((id, index) => {
-        update.run(
-          index + 1,
-          changed.has(id) ? 1 : 0,
-          timestamp,
-          articleId,
-          id,
-        );
+        tx.update(articleImages)
+          .set(
+            changed.has(id)
+              ? {
+                  position: index + 1,
+                  needsUpload: true,
+                  updatedAt: new Date(timestamp),
+                }
+              : { position: index + 1, updatedAt: new Date(timestamp) },
+          )
+          .where(
+            and(
+              eq(articleImages.articleId, articleId),
+              eq(articleImages.id, id),
+            ),
+          )
+          .run();
       });
     });
 
-    reorder();
     return this.list(articleId);
   }
 
@@ -210,22 +228,30 @@ export class ArticleImageRepository {
       );
     }
 
-    const remove = this.sqlite.transaction(() => {
-      this.sqlite
-        .prepare(`DELETE FROM article_images WHERE article_id = ? AND id = ?`)
-        .run(articleId, imageId);
-      this.sqlite
-        .prepare(
-          `
-          UPDATE article_images
-          SET position = position - 1, needs_upload = 1, updated_at = ?
-          WHERE article_id = ? AND position > ?
-        `,
+    this.db.transaction((tx) => {
+      tx.delete(articleImages)
+        .where(
+          and(
+            eq(articleImages.articleId, articleId),
+            eq(articleImages.id, imageId),
+          ),
         )
-        .run(this.now().getTime(), articleId, removed.position);
+        .run();
+      tx.update(articleImages)
+        .set({
+          position: sql`${articleImages.position} - 1`,
+          needsUpload: true,
+          updatedAt: this.now(),
+        })
+        .where(
+          and(
+            eq(articleImages.articleId, articleId),
+            sql`${articleImages.position} > ${removed.position}`,
+          ),
+        )
+        .run();
     });
 
-    remove();
     return this.list(articleId);
   }
 
@@ -244,24 +270,26 @@ export class ArticleImageRepository {
       );
     }
 
-    const placeholders = ids.map(() => "?").join(", ");
-    this.sqlite
-      .prepare(
-        `
-        UPDATE article_images
-        SET needs_upload = 0, updated_at = ?
-        WHERE article_id = ? AND id IN (${placeholders})
-      `,
+    this.db
+      .update(articleImages)
+      .set({ needsUpload: false, updatedAt: this.now() })
+      .where(
+        and(
+          eq(articleImages.articleId, articleId),
+          inArray(articleImages.id, ids),
+        ),
       )
-      .run(this.now().getTime(), articleId, ...ids);
+      .run();
 
     return this.list(articleId);
   }
 
   private assertArticleExists(articleId: string): void {
-    const row = this.sqlite
-      .prepare(`SELECT 1 FROM articles WHERE id = ?`)
-      .get(articleId);
+    const row = this.db
+      .select({ id: articles.id })
+      .from(articles)
+      .where(eq(articles.id, articleId))
+      .get();
     if (!row) {
       throw new ArticleImageRepositoryError(
         "article_not_found",
@@ -270,12 +298,13 @@ export class ArticleImageRepository {
     }
   }
 
-  private rows(articleId: string): ArticleImageDatabaseRow[] {
-    return this.sqlite
-      .prepare(
-        `SELECT * FROM article_images WHERE article_id = ? ORDER BY position`,
-      )
-      .all(articleId) as ArticleImageDatabaseRow[];
+  private rows(articleId: string): ArticleImageRow[] {
+    return this.db
+      .select()
+      .from(articleImages)
+      .where(eq(articleImages.articleId, articleId))
+      .orderBy(asc(articleImages.position))
+      .all();
   }
 }
 
@@ -298,7 +327,7 @@ function assertValidFile(file: NewArticleImage): void {
 }
 
 function assertCompleteOrder(
-  current: readonly ArticleImageDatabaseRow[],
+  current: readonly ArticleImageRow[],
   orderedImageIds: readonly string[],
 ): void {
   const currentIds = new Set(current.map((image) => image.id));
@@ -315,16 +344,16 @@ function assertCompleteOrder(
   }
 }
 
-function toArticleImage(row: ArticleImageDatabaseRow): ArticleImage {
+function toArticleImage(row: ArticleImageRow): ArticleImage {
   return {
     id: row.id,
-    articleId: row.article_id,
+    articleId: row.articleId,
     position: row.position,
-    originalName: row.original_name,
-    mediaType: row.media_type,
-    sizeBytes: row.size_bytes,
-    needsUpload: row.needs_upload === 1,
-    createdAt: new Date(row.created_at),
-    updatedAt: new Date(row.updated_at),
+    originalName: row.originalName,
+    mediaType: row.mediaType,
+    sizeBytes: row.sizeBytes,
+    needsUpload: row.needsUpload,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
   };
 }

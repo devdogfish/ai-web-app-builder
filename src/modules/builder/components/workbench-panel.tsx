@@ -10,6 +10,7 @@ import {
   FileDiffIcon,
   MonitorIcon,
   Redo2Icon,
+  RefreshCwIcon,
   RotateCcwIcon,
   SearchIcon,
   Settings2Icon,
@@ -24,6 +25,8 @@ import { ArticlePreview } from "@/modules/builder/components/article-preview";
 import { PreviewDevice } from "@/modules/builder/components/preview-device";
 import {
   SourceEditor,
+  findManagedComponentReferenceRanges,
+  readManagedComponentReference,
   type SourceEditorHandle,
   type ManagedComponentReferenceRange,
 } from "@/modules/builder/components/source-editor";
@@ -72,14 +75,16 @@ import type {
 } from "@/modules/builder/core/contracts";
 import type { BuilderEnvironment } from "@/modules/builder/environment/types";
 import { getWebsiteConfig } from "@/modules/builder/environment/websites";
-import { ComponentInstanceDialog } from "@/modules/components/ui/component-instance-dialog";
+import { ComponentInstanceInspector } from "@/modules/components/ui/component-instance-inspector";
 import {
   detachComponentDraftAction,
   getComponentSpecAction,
+  listComponentSummariesAction,
 } from "@/modules/components/server/actions";
 import type {
   ComponentData,
   ComponentSpec,
+  ComponentSummary,
 } from "@/modules/components/contracts";
 import { validateComponentData } from "@/modules/components/schema";
 import {
@@ -136,15 +141,19 @@ export function WorkbenchPanel({
   const [previewSize, setPreviewSize] = useState<"desktop" | "mobile">(
     "desktop",
   );
+  const [previewRevision, setPreviewRevision] = useState(0);
   const pendingApplyRef = useRef<string | null>(null);
   const [activeComponent, setActiveComponent] = useState<{
     index: number;
-    type: string;
+    id: string;
     data: ComponentData;
   } | null>(null);
   const [componentSpec, setComponentSpec] = useState<ComponentSpec | null>(
     null,
   );
+  const [componentSummaries, setComponentSummaries] = useState<
+    ComponentSummary[]
+  >([]);
   const [componentBusy, setComponentBusy] = useState(false);
   const [confirmDetach, setConfirmDetach] = useState(false);
   const showDiff =
@@ -187,14 +196,16 @@ export function WorkbenchPanel({
   ]);
 
   const openManagedComponent = useCallback(
-    async (selected: ManagedComponentReferenceRange) => {
+    async (
+      selected: ManagedComponentReferenceRange,
+      currentSource: string = draft,
+    ) => {
       try {
-        const reference = parseArticleSource(draft).references[selected.index];
-        if (!reference || reference.type !== selected.type) {
-          toast.error("The selected Component changed. Please click it again.");
-          return;
-        }
-        const result = await getComponentSpecAction(reference.type);
+        const reference = readManagedComponentReference(
+          currentSource,
+          selected,
+        );
+        const result = await getComponentSpecAction(reference.id);
         if (!result.ok) {
           toast.error(result.error);
           return;
@@ -205,7 +216,7 @@ export function WorkbenchPanel({
         setComponentSpec(result.data);
         setActiveComponent({
           index: selected.index,
-          type: reference.type,
+          id: reference.id,
           data: mergeComponentData(result.data.defaultData, providedData),
         });
       } catch (error) {
@@ -213,6 +224,29 @@ export function WorkbenchPanel({
       }
     },
     [draft],
+  );
+
+  const openInsertedComponent = useCallback(
+    (id: string, source: string, start: number) => {
+      const references = parseArticleSource(source).references;
+      const index = references.findIndex(
+        (reference) => reference.start === start && reference.id === id,
+      );
+      if (index < 0) {
+        toast.error("The inserted Component could not be opened.");
+        return;
+      }
+      void openManagedComponent(
+        {
+          from: references[index]!.start,
+          to: references[index]!.end,
+          index,
+          id,
+        },
+        source,
+      );
+    },
+    [openManagedComponent],
   );
 
   const saveComponentData = useCallback(
@@ -225,29 +259,47 @@ export function WorkbenchPanel({
         );
         return;
       }
+      setComponentBusy(true);
       try {
-        const references = parseArticleSource(draft).references;
-        const reference = references[activeComponent.index];
-        if (!reference || reference.type !== activeComponent.type) {
+        const selected =
+          findManagedComponentReferenceRanges(draft)[activeComponent.index];
+        if (!selected || selected.id !== activeComponent.id) {
           throw new Error(
             "The selected Component changed. Open it again and retry.",
           );
         }
+        const reference = readManagedComponentReference(draft, selected);
         const replacement = serializeComponentReference(
-          { type: activeComponent.type, data },
+          { id: activeComponent.id, data },
           componentSpec.schema,
         );
-        onDraftChange(
-          `${draft.slice(0, reference.start)}${replacement}${draft.slice(reference.end)}`,
-        );
+        const updated = `${draft.slice(0, reference.start)}${replacement}${draft.slice(reference.end)}`;
+        const formatted = await formatSource(updated);
+        if (formatted === null) return;
+
         setActiveComponent(null);
         setComponentSpec(null);
-        toast.success("Component data updated.");
+        if (formatted === draft) {
+          onApply();
+          return;
+        }
+
+        pendingApplyRef.current = formatted;
+        onDraftChange(formatted);
       } catch (error) {
         toast.error((error as Error).message);
+      } finally {
+        setComponentBusy(false);
       }
     },
-    [activeComponent, componentSpec, draft, onDraftChange],
+    [
+      activeComponent,
+      componentSpec,
+      draft,
+      formatSource,
+      onApply,
+      onDraftChange,
+    ],
   );
 
   const detachActiveComponent = useCallback(async () => {
@@ -257,7 +309,7 @@ export function WorkbenchPanel({
       const result = await detachComponentDraftAction(
         draft,
         activeComponent.index,
-        activeComponent.type,
+        activeComponent.id,
       );
       if (!result.ok) {
         toast.error(result.error);
@@ -272,6 +324,30 @@ export function WorkbenchPanel({
       setComponentBusy(false);
     }
   }, [activeComponent, draft, onDraftChange]);
+
+  useEffect(() => {
+    let active = true;
+
+    async function refreshComponentSummaries() {
+      const result = await listComponentSummariesAction();
+      if (active && result.ok) setComponentSummaries(result.data);
+    }
+
+    function refreshWhenVisible() {
+      if (document.visibilityState === "visible") {
+        void refreshComponentSummaries();
+      }
+    }
+
+    void refreshComponentSummaries();
+    window.addEventListener("focus", refreshWhenVisible);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      active = false;
+      window.removeEventListener("focus", refreshWhenVisible);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, []);
 
   useEffect(() => {
     if (pendingApplyRef.current === null || pendingApplyRef.current !== draft) {
@@ -342,10 +418,19 @@ export function WorkbenchPanel({
                 </TabsTrigger>
               </TabsList>
               {tab === "preview" ? (
-                <PreviewSizeToggle
-                  value={previewSize}
-                  onChange={setPreviewSize}
-                />
+                <>
+                  <PreviewSizeToggle
+                    value={previewSize}
+                    onChange={setPreviewSize}
+                  />
+                  <EditorAction
+                    label="Refresh preview"
+                    disabled={generating}
+                    onClick={() => setPreviewRevision((value) => value + 1)}
+                  >
+                    <RefreshCwIcon />
+                  </EditorAction>
+                </>
               ) : null}
             </div>
 
@@ -447,24 +532,48 @@ export function WorkbenchPanel({
           >
             <PreviewDevice mode={previewSize}>
               <ArticlePreview
+                key={previewRevision}
                 source={draft}
                 assetPolicy={website.assetPolicy}
                 siteProfile={website.previewProfile}
                 title={environment.articleTitle}
+                versionId={selectedVersion?.id ?? null}
                 images={articleImages}
                 onRuntimeError={onRuntimeError}
               />
             </PreviewDevice>
           </TabsContent>
-          <TabsContent value="source" className="min-h-0 flex-1">
-            <SourceEditor
-              ref={editorRef}
-              value={draft}
-              onChange={onDraftChange}
-              original={showDiff ? previousVersion.content : undefined}
-              readOnly={generating || !isCurrentVersion || showDiff}
-              onManagedComponentClick={openManagedComponent}
-            />
+          <TabsContent
+            value="source"
+            className="min-h-0 flex-1 overflow-hidden"
+          >
+            <div className="flex h-full min-h-0 flex-col lg:flex-row">
+              <SourceEditor
+                ref={editorRef}
+                className="min-w-0 flex-1"
+                value={draft}
+                onChange={onDraftChange}
+                original={showDiff ? previousVersion.content : undefined}
+                readOnly={generating || !isCurrentVersion || showDiff}
+                componentSummaries={componentSummaries}
+                onManagedComponentClick={openManagedComponent}
+                onManagedComponentInsert={openInsertedComponent}
+              />
+              {activeComponent ? (
+                <ComponentInstanceInspector
+                  key={`${activeComponent.id}-${activeComponent.index}`}
+                  definition={componentSpec}
+                  data={activeComponent.data}
+                  saving={componentBusy}
+                  onClose={() => {
+                    setActiveComponent(null);
+                    setComponentSpec(null);
+                  }}
+                  onSave={saveComponentData}
+                  onDetach={() => setConfirmDetach(true)}
+                />
+              ) : null}
+            </div>
           </TabsContent>
         </Tabs>
       </CardContent>
@@ -503,6 +612,8 @@ export function WorkbenchPanel({
             disabled={generating}
             onClick={() => {
               pendingApplyRef.current = null;
+              setActiveComponent(null);
+              setComponentSpec(null);
               onDraftChange(selectedVersion?.content ?? "");
             }}
           >
@@ -520,24 +631,6 @@ export function WorkbenchPanel({
           </Button>
         </Card>
       ) : null}
-      <ComponentInstanceDialog
-        key={
-          activeComponent
-            ? `${activeComponent.type}-${activeComponent.index}`
-            : "closed"
-        }
-        open={activeComponent !== null}
-        definition={componentSpec}
-        data={activeComponent?.data ?? {}}
-        saving={componentBusy}
-        onOpenChange={(open) => {
-          if (open) return;
-          setActiveComponent(null);
-          setComponentSpec(null);
-        }}
-        onSave={saveComponentData}
-        onDetach={() => setConfirmDetach(true)}
-      />
       <AlertDialog open={confirmDetach} onOpenChange={setConfirmDetach}>
         <AlertDialogContent>
           <AlertDialogHeader>

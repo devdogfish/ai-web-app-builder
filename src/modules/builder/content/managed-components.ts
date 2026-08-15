@@ -17,7 +17,7 @@ export class ManagedArticleSourceError extends Error {
   }
 }
 
-/** Formats HTML around Components and canonicalizes managed directives. */
+/** Formats HTML around Components and canonicalizes internal references. */
 export function formatManagedArticleSource(
   source: string,
   lookup: ComponentLookup,
@@ -25,12 +25,12 @@ export function formatManagedArticleSource(
   return formatArticleSource(
     source,
     formatArticleHtml,
-    (type) => componentDefinition(lookup, type)?.schema,
+    (id) => componentDefinition(lookup, id)?.schema,
   );
 }
 
 /** Validates both ordinary HTML and every managed Component reference. */
-export function assertValidManagedArticleSource(
+export async function assertValidManagedArticleSource(
   source: string,
   lookup: ComponentLookup,
   options: {
@@ -38,7 +38,7 @@ export function assertValidManagedArticleSource(
     allowDeleted?: boolean;
     previousSource?: string;
   } = {},
-): void {
+): Promise<void> {
   let parsed: ReturnType<typeof parseManagedReferences>;
   try {
     parsed = parseManagedReferences(source);
@@ -48,9 +48,13 @@ export function assertValidManagedArticleSource(
 
   const masked = replaceReferencesWithValidHtml(source, parsed.references);
   assertValidArticleSource(masked, { allowBlank: options.allowBlank });
-  const componentValidation = validateArticleSourceComponents(source, lookup, {
-    allowDeleted: options.allowDeleted ?? false,
-  });
+  const componentValidation = await validateArticleSourceComponents(
+    source,
+    lookup,
+    {
+      allowDeleted: options.allowDeleted ?? false,
+    },
+  );
   if (!componentValidation.valid) {
     throw new ManagedArticleSourceError(
       componentValidation.issues.map((issue) => issue.message).join(" "),
@@ -68,11 +72,11 @@ export async function compileManagedArticleSource(
   lookup: ComponentLookup,
   options: { allowDeleted?: boolean } = {},
 ): Promise<string> {
-  assertValidManagedArticleSource(source, lookup, {
+  await assertValidManagedArticleSource(source, lookup, {
     allowBlank: true,
     allowDeleted: options.allowDeleted,
   });
-  const compiled = compileArticleSource(source, lookup, {
+  const compiled = await compileArticleSource(source, lookup, {
     maxOutputBytes: BUILDER_DOCUMENT_LIMITS.maxSourceBytes,
   });
   assertValidArticleSource(compiled, { allowBlank: true });
@@ -83,9 +87,9 @@ export async function compileManagedArticleSource(
 }
 
 /**
- * Guards accidental removal by Component type. The deliberately minimal
- * `{type,data}` syntax has no persistent instance identity, so duplicate
- * references of one type are semantically interchangeable.
+ * Guards accidental removal by Component ID. The deliberately minimal
+ * `{id,data}` syntax has no persistent instance identity, so duplicate
+ * references of one Component are semantically interchangeable.
  */
 export function assertManagedReferencesPreserved(
   previousSource: string,
@@ -93,10 +97,10 @@ export function assertManagedReferencesPreserved(
 ): void {
   const previous = referenceCounts(previousSource);
   const next = referenceCounts(nextSource);
-  for (const [type, count] of previous) {
-    if ((next.get(type) ?? 0) < count) {
+  for (const [id, count] of previous) {
+    if ((next.get(id) ?? 0) < count) {
       throw new ManagedArticleSourceError(
-        `Managed Component ${type} cannot be detached through source editing. Use the confirmed Detach action.`,
+        `Managed Component ${id} cannot be detached through source editing. Use the confirmed Detach action.`,
       );
     }
   }
@@ -105,7 +109,7 @@ export function assertManagedReferencesPreserved(
 function referenceCounts(source: string): Map<string, number> {
   const counts = new Map<string, number>();
   for (const reference of parseManagedReferences(source).references) {
-    counts.set(reference.type, (counts.get(reference.type) ?? 0) + 1);
+    counts.set(reference.id, (counts.get(reference.id) ?? 0) + 1);
   }
   return counts;
 }
@@ -121,12 +125,14 @@ function replaceReferencesWithValidHtml(
   return masked;
 }
 
-function componentDefinition(lookup: ComponentLookup, type: string) {
-  if (typeof lookup === "function") return lookup(type) ?? null;
-  if ("getForCompilation" in lookup) return lookup.getForCompilation(type);
-  return lookup.get(type) ?? null;
+function componentDefinition(lookup: ComponentLookup, id: string) {
+  if (typeof lookup === "function") return lookup(id) ?? null;
+  if ("getForCompilation" in lookup) return lookup.getForCompilation(id);
+  return lookup.get(id) ?? null;
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "Invalid managed Component source.";
+  return error instanceof Error
+    ? error.message
+    : "Invalid managed Component source.";
 }
