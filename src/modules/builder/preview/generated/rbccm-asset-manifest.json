@@ -1,0 +1,314 @@
+{
+  "profile": "rbccm",
+  "sourceUrl": "https://www.rbccm.com/en/insights/2026/07/data-centers-become-the-new-battleground-in-iran-war",
+  "generatedAt": "2026-08-14T17:46:26.114Z",
+  "stylesheets": [
+    {
+      "href": "/preview-sites/rbccm/origin/iwov-resources/fixed-layout/rbccm_2col_8_4.css",
+      "media": null
+    },
+    {
+      "href": "/preview-sites/rbccm/origin/assets/rbccm/css/bootstrap.min.css",
+      "media": null
+    },
+    {
+      "href": "/preview-sites/rbccm/origin/assets/rbccm/fonts/font-awesome/css/font-awesome.min.css",
+      "media": null
+    },
+    {
+      "href": "/preview-sites/rbccm/origin/assets/rbccm/css/rbccm.2.css",
+      "media": null
+    },
+    {
+      "href": "/preview-sites/rbccm/origin/assets/rbccm/css/sub/new-components.css",
+      "media": null
+    },
+    {
+      "href": "/preview-sites/rbccm/origin/assets/rbccm/css/sub/plyr.css",
+      "media": null
+    },
+    {
+      "href": "/preview-sites/rbccm/origin/assets/rbccm/css/sub/biopharma.css",
+      "media": null
+    },
+    {
+      "href": "/preview-sites/rbccm/origin/assets/rbccm/css/sub/page-banner-interior.css",
+      "media": null
+    },
+    {
+      "href": "/preview-sites/rbccm/origin/assets/rbccm/css/sub/unified.css",
+      "media": null
+    },
+    {
+      "href": "/preview-sites/rbccm/origin/assets/rbccm/css/sub/unified2.css",
+      "media": null
+    },
+    {
+      "href": "/preview-sites/rbccm/origin/assets/rbccm/css/sub/story-new.css",
+      "media": null
+    },
+    {
+      "href": "/preview-sites/rbccm/origin/assets/rbccm/css/sub/marketo-update.css",
+      "media": null
+    }
+  ],
+  "headScripts": [
+    {
+      "src": "/preview-sites/rbccm/origin/assets/rbccm/js/jquery-3.5.1.min.js",
+      "sourceUrl": "https://www.rbccm.com/assets/rbccm/js/jquery-3.5.1.min.js",
+      "async": false,
+      "defer": false,
+      "type": null
+    },
+    {
+      "src": "/preview-sites/rbccm/origin/assets/rbccm/js/bootstrap.min.js",
+      "sourceUrl": "https://www.rbccm.com/assets/rbccm/js/bootstrap.min.js",
+      "async": false,
+      "defer": false,
+      "type": null
+    },
+    {
+      "src": "/preview-sites/rbccm/origin/assets/rbccm/js/nav.min.js",
+      "sourceUrl": "https://www.rbccm.com/assets/rbccm/js/nav.min.js",
+      "async": false,
+      "defer": false,
+      "type": null
+    },
+    {
+      "src": "/preview-sites/rbccm/origin/assets/rbccm/js/marketo-accessibility.js",
+      "sourceUrl": "https://www.rbccm.com/assets/rbccm/js/marketo-accessibility.js",
+      "async": false,
+      "defer": false,
+      "type": null
+    },
+    {
+      "src": "/preview-sites/rbccm/origin/assets/rbccm/js/sub/plyr.js",
+      "sourceUrl": "https://www.rbccm.com/assets/rbccm/js/sub/plyr.js",
+      "async": false,
+      "defer": false,
+      "type": null
+    },
+    {
+      "src": "/preview-sites/rbccm/origin/assets/rbccm/js/sub/story-insights-landing-redirect.js",
+      "sourceUrl": "https://www.rbccm.com/assets/rbccm/js/sub/story-insights-landing-redirect.js",
+      "async": false,
+      "defer": false,
+      "type": null
+    },
+    {
+      "src": "/preview-sites/rbccm/origin/assets/rbccm/js/sub/story-related.js",
+      "sourceUrl": "https://www.rbccm.com/assets/rbccm/js/sub/story-related.js",
+      "async": false,
+      "defer": false,
+      "type": null
+    },
+    {
+      "src": "/preview-sites/rbccm/origin/assets/rbccm/js/jsrender.min.js",
+      "sourceUrl": "https://www.rbccm.com/assets/rbccm/js/jsrender.min.js",
+      "async": false,
+      "defer": false,
+      "type": null
+    },
+    {
+      "src": "/preview-sites/rbccm/origin/assets/rbccm/js/sub/audio-plyr.js",
+      "sourceUrl": "https://www.rbccm.com/assets/rbccm/js/sub/audio-plyr.js",
+      "async": false,
+      "defer": false,
+      "type": null
+    },
+    {
+      "src": "/preview-sites/rbccm/origin/assets/rbccm/js/sub/redirect-rbccm-story.js",
+      "sourceUrl": "https://www.rbccm.com/assets/rbccm/js/sub/redirect-rbccm-story.js",
+      "async": false,
+      "defer": false,
+      "type": null
+    }
+  ],
+  "bodyScripts": [
+    {
+      "src": "/preview-sites/rbccm/inline/script-01.js",
+      "sourceUrl": "https://www.rbccm.com/en/insights/2026/07/data-centers-become-the-new-battleground-in-iran-war#inline-script-1",
+      "async": false,
+      "defer": false,
+      "type": null
+    },
+    {
+      "src": "/preview-sites/rbccm/inline/script-02.js",
+      "sourceUrl": "https://www.rbccm.com/en/insights/2026/07/data-centers-become-the-new-battleground-in-iran-war#inline-script-2",
+      "async": false,
+      "defer": false,
+      "type": null
+    },
+    {
+      "src": "/preview-sites/rbccm/inline/script-03.js",
+      "sourceUrl": "https://www.rbccm.com/en/insights/2026/07/data-centers-become-the-new-battleground-in-iran-war#inline-script-3",
+      "async": false,
+      "defer": false,
+      "type": null
+    },
+    {
+      "src": "/preview-sites/rbccm/inline/script-04.js",
+      "sourceUrl": "https://www.rbccm.com/en/insights/2026/07/data-centers-become-the-new-battleground-in-iran-war#inline-script-4",
+      "async": false,
+      "defer": false,
+      "type": null
+    },
+    {
+      "src": "/preview-sites/rbccm/external/discover.rbccm.com/js/forms2/js/forms2.min.js",
+      "sourceUrl": "https://discover.rbccm.com/js/forms2/js/forms2.min.js",
+      "async": false,
+      "defer": false,
+      "type": null
+    },
+    {
+      "src": "/preview-sites/rbccm/external/www.linkedin.com/autofill/js/autofill.js",
+      "sourceUrl": "https://www.linkedin.com/autofill/js/autofill.js",
+      "async": true,
+      "defer": false,
+      "type": null
+    },
+    {
+      "src": "/preview-sites/rbccm/inline/script-05.js",
+      "sourceUrl": "https://www.rbccm.com/en/insights/2026/07/data-centers-become-the-new-battleground-in-iran-war#inline-script-5",
+      "async": false,
+      "defer": false,
+      "type": null
+    },
+    {
+      "src": "/preview-sites/rbccm/inline/script-06.js",
+      "sourceUrl": "https://www.rbccm.com/en/insights/2026/07/data-centers-become-the-new-battleground-in-iran-war#inline-script-6",
+      "async": false,
+      "defer": false,
+      "type": null
+    },
+    {
+      "src": "/preview-sites/rbccm/inline/script-07.js",
+      "sourceUrl": "https://www.rbccm.com/en/insights/2026/07/data-centers-become-the-new-battleground-in-iran-war#inline-script-7",
+      "async": false,
+      "defer": false,
+      "type": null
+    },
+    {
+      "src": "/preview-sites/rbccm/origin/assets/rbccm/js/jsrender.min.js",
+      "sourceUrl": "https://www.rbccm.com/assets/rbccm/js/jsrender.min.js",
+      "async": false,
+      "defer": false,
+      "type": null
+    },
+    {
+      "src": "/preview-sites/rbccm/origin/assets/rbccm/js/sub/story-related.js",
+      "sourceUrl": "https://www.rbccm.com/assets/rbccm/js/sub/story-related.js",
+      "async": false,
+      "defer": false,
+      "type": null
+    },
+    {
+      "src": "/preview-sites/rbccm/external/use.fontawesome.com/6c097a09a7.js",
+      "sourceUrl": "https://use.fontawesome.com/6c097a09a7.js",
+      "async": true,
+      "defer": false,
+      "type": null
+    },
+    {
+      "src": "/preview-sites/rbccm/inline/script-08.js",
+      "sourceUrl": "https://www.rbccm.com/en/insights/2026/07/data-centers-become-the-new-battleground-in-iran-war#inline-script-8",
+      "async": false,
+      "defer": false,
+      "type": null
+    },
+    {
+      "src": "/preview-sites/rbccm/external/use.fontawesome.com/6c097a09a7.js",
+      "sourceUrl": "https://use.fontawesome.com/6c097a09a7.js",
+      "async": false,
+      "defer": false,
+      "type": null
+    },
+    {
+      "src": "/preview-sites/rbccm/inline/script-09.js",
+      "sourceUrl": "https://www.rbccm.com/en/insights/2026/07/data-centers-become-the-new-battleground-in-iran-war#inline-script-9",
+      "async": false,
+      "defer": false,
+      "type": null
+    }
+  ],
+  "downloaded": [
+    "/preview-sites/rbccm/external/discover.rbccm.com/js/forms2/js/forms2.min.js",
+    "/preview-sites/rbccm/external/use.fontawesome.com/6c097a09a7.js",
+    "/preview-sites/rbccm/external/www.linkedin.com/autofill/js/autofill.js",
+    "/preview-sites/rbccm/inline/script-01.js",
+    "/preview-sites/rbccm/inline/script-02.js",
+    "/preview-sites/rbccm/inline/script-03.js",
+    "/preview-sites/rbccm/inline/script-04.js",
+    "/preview-sites/rbccm/inline/script-05.js",
+    "/preview-sites/rbccm/inline/script-06.js",
+    "/preview-sites/rbccm/inline/script-07.js",
+    "/preview-sites/rbccm/inline/script-08.js",
+    "/preview-sites/rbccm/inline/script-09.js",
+    "/preview-sites/rbccm/origin/assets/rbccm/css/bootstrap.min.css",
+    "/preview-sites/rbccm/origin/assets/rbccm/css/rbccm.2.css",
+    "/preview-sites/rbccm/origin/assets/rbccm/css/sub/biopharma.css",
+    "/preview-sites/rbccm/origin/assets/rbccm/css/sub/marketo-update.css",
+    "/preview-sites/rbccm/origin/assets/rbccm/css/sub/new-components.css",
+    "/preview-sites/rbccm/origin/assets/rbccm/css/sub/page-banner-interior.css",
+    "/preview-sites/rbccm/origin/assets/rbccm/css/sub/plyr.css",
+    "/preview-sites/rbccm/origin/assets/rbccm/css/sub/story-new.css",
+    "/preview-sites/rbccm/origin/assets/rbccm/css/sub/unified.css",
+    "/preview-sites/rbccm/origin/assets/rbccm/css/sub/unified2.css",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/RBCDisplay/RBCDisplay-Bold.ttf",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/RBCDisplay/RBCDisplay-Regular.otf",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/RBCDisplay/RBCDisplay-Regular.ttf",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/RBCDisplay/rbcdisplay-bold-webfont.eot",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/RBCDisplay/rbcdisplay-bold-webfont.woff",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/RBCDisplay/rbcdisplay-bold-webfont.woff2",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/RBCDisplay/rbcdisplay-regular-webfont.eot",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/RBCDisplay/rbcdisplay-regular-webfont.woff",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/fira/FiraSans-Bold.eot",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/fira/FiraSans-Bold.otf",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/fira/FiraSans-Bold.woff",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/fira/FiraSans-Book.eot",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/fira/FiraSans-Book.otf",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/fira/FiraSans-Book.woff",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/fira/FiraSans-Medium.eot",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/fira/FiraSans-Medium.otf",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/fira/FiraSans-Medium.woff",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/font-awesome/css/font-awesome.min.css",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/font-awesome/webfonts/fa-brands-400.ttf",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/font-awesome/webfonts/fa-brands-400.woff2",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/font-awesome/webfonts/fa-regular-400.ttf",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/font-awesome/webfonts/fa-regular-400.woff2",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/font-awesome/webfonts/fa-solid-900.ttf",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/font-awesome/webfonts/fa-solid-900.woff2",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/font-awesome/webfonts/fa-v4compatibility.ttf",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/font-awesome/webfonts/fa-v4compatibility.woff2",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/glyphicons-halflings-regular.eot",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/glyphicons-halflings-regular.ttf",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/glyphicons-halflings-regular.woff",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/glyphicons-halflings-regular.woff2",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/roboto/Roboto-Medium-webfont.eot",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/roboto/Roboto-Medium-webfont.ttf",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/roboto/Roboto-Medium-webfont.woff",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/roboto/Roboto-Regular-webfont.eot",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/roboto/Roboto-Regular-webfont.ttf",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/roboto/Roboto-Regular-webfont.woff",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/roboto/roboto-light-webfont.eot",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/roboto/roboto-light-webfont.ttf",
+    "/preview-sites/rbccm/origin/assets/rbccm/fonts/roboto/roboto-light-webfont.woff",
+    "/preview-sites/rbccm/origin/assets/rbccm/js/bootstrap.min.js",
+    "/preview-sites/rbccm/origin/assets/rbccm/js/jquery-3.5.1.min.js",
+    "/preview-sites/rbccm/origin/assets/rbccm/js/jsrender.min.js",
+    "/preview-sites/rbccm/origin/assets/rbccm/js/marketo-accessibility.js",
+    "/preview-sites/rbccm/origin/assets/rbccm/js/nav.min.js",
+    "/preview-sites/rbccm/origin/assets/rbccm/js/sub/audio-plyr.js",
+    "/preview-sites/rbccm/origin/assets/rbccm/js/sub/plyr.js",
+    "/preview-sites/rbccm/origin/assets/rbccm/js/sub/redirect-rbccm-story.js",
+    "/preview-sites/rbccm/origin/assets/rbccm/js/sub/story-insights-landing-redirect.js",
+    "/preview-sites/rbccm/origin/assets/rbccm/js/sub/story-related.js",
+    "/preview-sites/rbccm/origin/iwov-resources/fixed-layout/rbccm_2col_8_4.css"
+  ],
+  "unavailable": [
+    {
+      "sourceUrl": "https://kit.fontawesome.com/edf661692b.js",
+      "reason": "403 Forbidden"
+    }
+  ]
+}

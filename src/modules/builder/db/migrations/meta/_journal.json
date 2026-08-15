@@ -1,0 +1,48 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1786714450182,
+      "tag": "0000_careless_jazinda",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1786715782042,
+      "tag": "0001_wealthy_jasper_sitwell",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1786728507162,
+      "tag": "0002_mutable_active_version_content",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1786729046410,
+      "tag": "0003_collapse_legacy_manual_versions",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1786730761537,
+      "tag": "0004_superb_eternity",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1786736851257,
+      "tag": "0005_add-message-error-code",
+      "breakpoints": true
+    }
+  ]
+}
