@@ -417,7 +417,14 @@ export class ComponentRepository {
             updatedAt: now,
             deletedAt: null,
           })
-          .onConflictDoNothing()
+          .onConflictDoUpdate({
+            target: componentDefinitions.id,
+            set: {
+              ...stored,
+              updatedAt: now,
+              deletedAt: null,
+            },
+          })
           .run();
       }
     });

@@ -200,11 +200,13 @@ describe("Component compilation", () => {
   it("renders built-in tabs literally between ordinary HTML", async () => {
     const compiled = await compileArticleSource(tabsSource, definitions);
     expect(compiled).toMatch(/^<p>Before<\/p>/);
-    expect(compiled).toContain('<div class="article-tabs">');
+    expect(compiled).toContain('<div class="article-tabs"');
     expect(compiled).toContain('<p title="Normal attribute">A & B</p>');
     expect(compiled).toContain(
       "document.currentScript?.previousElementSibling",
     );
+    expect(compiled).toContain('style="border:1px solid #d8d8d8');
+    expect(compiled).not.toContain("<style");
     expect(compiled).toMatch(/<p>After<\/p>$/);
     expect(compiled).not.toContain("<Component");
   });
@@ -301,7 +303,7 @@ export default function Amplifier({ items }: Props) {
     const remaining = parseArticleSource(detached).references;
     expect(remaining).toHaveLength(1);
     expect(remaining[0]?.start).toBe(tabsSource.indexOf("<Component"));
-    expect(detached).toContain('<div class="article-tabs">');
+    expect(detached).toContain('<div class="article-tabs"');
   });
 
   it("materializes one type and leaves other managed references intact", async () => {
@@ -320,7 +322,7 @@ export default function Amplifier({ items }: Props) {
     expect(
       parseArticleSource(materialized).references.map((item) => item.id),
     ).toEqual(["attributed-quote"]);
-    expect(materialized).toContain('<div class="article-tabs">');
+    expect(materialized).toContain('<div class="article-tabs"');
   });
 });
 

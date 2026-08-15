@@ -1,7 +1,7 @@
 "use client";
 
 import { basicSetup } from "codemirror";
-import { autocompletion } from "@codemirror/autocomplete";
+import { acceptCompletion, autocompletion } from "@codemirror/autocomplete";
 import { html } from "@codemirror/lang-html";
 import { javascript } from "@codemirror/lang-javascript";
 import { unifiedMergeView } from "@codemirror/merge";
@@ -295,7 +295,9 @@ export const SourceEditor = forwardRef<
     if (!hostRef.current) return;
     const extensions: Extension[] = [
       basicSetup,
-      Prec.highest(keymap.of([indentWithTab])),
+      Prec.highest(
+        keymap.of([{ key: "Tab", run: acceptCompletion }, indentWithTab]),
+      ),
       language === "tsx"
         ? javascript({ typescript: true, jsx: true })
         : html({ selfClosingTags: true }),

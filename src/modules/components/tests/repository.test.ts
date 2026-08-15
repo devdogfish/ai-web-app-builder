@@ -81,8 +81,9 @@ describe("ComponentRepository", () => {
     sqlite.close();
   });
 
-  it("seeds self-contained TSX Components once", () => {
-    const repository = createRepository();
+  it("seeds authoritative self-contained TSX Components", () => {
+    const sqlite = new Database(":memory:");
+    const repository = new ComponentRepository({ sqlite });
     expect(repository.listSummaries()).toEqual([
       expect.objectContaining({ tag: "AttributedQuote" }),
       expect.objectContaining({ tag: "ImageCarousel" }),
@@ -90,7 +91,18 @@ describe("ComponentRepository", () => {
     ]);
     expect(repository.getByTag("Tabs")?.source).toContain("tabs.map");
     expect(repository.getByTag("Tabs")?.source).toContain("<script>");
+    expect(repository.getByTag("Tabs")?.source).not.toContain("TABS_SCRIPT");
+    expect(repository.getByTag("Tabs")?.source).not.toContain("<style");
+    repository.sqlite
+      .prepare("UPDATE component_definitions SET source = ? WHERE id = ?")
+      .run("legacy source", "tabs");
     repository.close();
+
+    const reseeded = new ComponentRepository({ sqlite });
+    expect(reseeded.get("tabs")?.source).not.toBe("legacy source");
+    expect(reseeded.get("tabs")?.source).toContain('style={{ border: "1px');
+    reseeded.close();
+    sqlite.close();
   });
 
   it("creates, reads, updates, and validates Component Source", async () => {
